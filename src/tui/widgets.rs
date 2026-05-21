@@ -14,8 +14,53 @@ pub struct TileRow<'a> {
     pub word: Option<Word>,
     pub pattern: Option<Pattern>,
     pub buffer: Option<&'a str>,
+    /// Hard-mode letters locked at each position while typing a guess.
+    pub fixed_letters: Option<[Option<u8>; 5]>,
     pub feedback_draft: Option<[Option<Tile>; 5]>,
     pub feedback_cursor: Option<usize>,
+}
+
+impl TileRow<'_> {
+    fn letter_at(&self, i: usize) -> char {
+        if let Some(word) = self.word {
+            return word.as_str().chars().nth(i).unwrap_or(' ');
+        }
+
+        if let Some(fixed) = self.fixed_letters {
+            if let Some(b) = fixed[i] {
+                return b as char;
+            }
+            if let Some(buffer) = self.buffer {
+                let editable: Vec<usize> = (0..5).filter(|&j| fixed[j].is_none()).collect();
+                if let Some(buf_idx) = editable.iter().position(|&j| j == i) {
+                    return buffer.chars().nth(buf_idx).unwrap_or(' ');
+                }
+            }
+            return ' ';
+        }
+
+        if let Some(buf_str) = self.buffer {
+            return buf_str.chars().nth(i).unwrap_or(' ').to_ascii_uppercase();
+        }
+
+        ' '
+    }
+
+    fn tile_at(&self, i: usize) -> Tile {
+        if let Some(pattern) = self.pattern {
+            pattern.tiles[i]
+        } else if let Some(draft) = self.feedback_draft {
+            draft[i].unwrap_or(Tile::Absent)
+        } else if self
+            .fixed_letters
+            .and_then(|fixed| fixed[i])
+            .is_some()
+        {
+            Tile::Correct
+        } else {
+            Tile::Absent
+        }
+    }
 }
 
 impl Widget for TileRow<'_> {
@@ -31,24 +76,14 @@ impl Widget for TileRow<'_> {
                 break;
             }
 
-            let ch = if let Some(word) = self.word {
-                word.as_str().chars().nth(i).unwrap_or(' ')
-            } else if let Some(buf_str) = self.buffer {
-                buf_str.chars().nth(i).unwrap_or(' ').to_ascii_uppercase()
-            } else {
-                ' '
-            };
-
-            let tile = if let Some(pattern) = self.pattern {
-                pattern.tiles[i]
-            } else if let Some(draft) = self.feedback_draft {
-                draft[i].unwrap_or(Tile::Absent)
-            } else {
-                Tile::Absent
-            };
-
+            let ch = self.letter_at(i);
+            let tile = self.tile_at(i);
             let focused = self.feedback_cursor == Some(i);
-            let style = if self.pattern.is_some() || self.feedback_draft.is_some() {
+            let styled = self.pattern.is_some()
+                || self.feedback_draft.is_some()
+                || self.fixed_letters.is_some();
+
+            let style = if styled {
                 tile_style(tile, focused)
             } else {
                 Style::default()
@@ -57,7 +92,9 @@ impl Widget for TileRow<'_> {
                     .add_modifier(ratatui::style::Modifier::BOLD)
             };
 
-            let label = if ch == ' ' { " ".repeat(cell_width as usize) } else {
+            let label = if ch == ' ' {
+                " ".repeat(cell_width as usize)
+            } else {
                 format!(" {} ", ch.to_ascii_uppercase())
             };
 

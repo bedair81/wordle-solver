@@ -3,6 +3,11 @@ name = "wordle-solver"
 version = "0.1.0"
 edition = "2021"
 description = "NYTimes Wordle solver with TUI"
+default-run = "wordle-solver"
+
+[[bin]]
+name = "solver-quality"
+path = "src/bin/solver-quality.rs"
 
 [dependencies]
 ratatui = "0.29"

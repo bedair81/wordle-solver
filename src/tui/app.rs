@@ -1,5 +1,7 @@
 use std::io::{self, stdout};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 use crossterm::{
@@ -25,16 +27,36 @@ pub enum Screen {
 
 pub struct App {
     pub screen: Screen,
-    pub word_lists: Arc<WordLists>,
+    pub word_lists: Option<Arc<WordLists>>,
+    load_rx: Receiver<Arc<WordLists>>,
     pub should_quit: bool,
 }
 
 impl App {
     pub fn new() -> Self {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let lists = Arc::new(WordLists::load());
+            let _ = tx.send(lists);
+        });
+
         Self {
             screen: Screen::Menu(MenuState::new()),
-            word_lists: Arc::new(WordLists::load()),
+            word_lists: None,
+            load_rx: rx,
             should_quit: false,
+        }
+    }
+
+    pub fn is_loading(&self) -> bool {
+        self.word_lists.is_none()
+    }
+
+    fn poll_word_lists(&mut self) {
+        if self.word_lists.is_none() {
+            if let Ok(lists) = self.load_rx.try_recv() {
+                self.word_lists = Some(lists);
+            }
         }
     }
 
@@ -63,27 +85,33 @@ impl App {
     }
 
     fn handle_action(&mut self, action: Action) {
+        let word_lists = self.word_lists.clone();
+
         match &mut self.screen {
             Screen::Menu(state) => match action {
                 Action::Quit => self.should_quit = true,
                 Action::Up => state.move_up(),
                 Action::Down => state.move_down(3),
                 Action::Help => state.show_help = !state.show_help,
-                Action::Submit => match state.selected {
-                    0 => {
-                        self.screen = Screen::Aid(aid::PlayState::new(
-                            self.word_lists.clone(),
-                            false,
-                            "Solver Aid",
-                        ));
+                Action::Submit => {
+                    let Some(word_lists) = word_lists else {
+                        return;
+                    };
+                    match state.selected {
+                        0 => {
+                            self.screen = Screen::Aid(aid::PlayState::new(
+                                word_lists,
+                                false,
+                                "Solver Aid",
+                            ));
+                        }
+                        1 => {
+                            self.screen = Screen::Copilot(copilot::new(word_lists));
+                        }
+                        2 => self.screen = Screen::Simulate(SimulateState::new()),
+                        _ => {}
                     }
-                    1 => {
-                        self.screen =
-                            Screen::Copilot(copilot::new(self.word_lists.clone()));
-                    }
-                    2 => self.screen = Screen::Simulate(SimulateState::new()),
-                    _ => {}
-                },
+                }
                 _ => {}
             },
             Screen::Aid(state) => {
@@ -97,16 +125,21 @@ impl App {
                 }
             }
             Screen::Simulate(state) => {
-                if state.handle(action, self.word_lists.clone()) {
-                    self.screen = Screen::Menu(MenuState::new());
+                if let Some(word_lists) = word_lists {
+                    if state.handle(action, word_lists) {
+                        self.screen = Screen::Menu(MenuState::new());
+                    }
                 }
             }
         }
     }
 
     fn tick(&mut self) {
-        if let Screen::Simulate(state) = &mut self.screen {
-            state.tick(&self.word_lists);
+        self.poll_word_lists();
+
+        let word_lists = self.word_lists.clone();
+        if let (Some(word_lists), Screen::Simulate(state)) = (word_lists, &mut self.screen) {
+            state.tick(&word_lists);
         }
     }
 }
@@ -158,6 +191,11 @@ pub fn run() -> io::Result<()> {
 }
 
 fn render(frame: &mut ratatui::Frame, app: &mut App) {
+    if app.is_loading() {
+        menu::render_loading(frame);
+        return;
+    }
+
     match &mut app.screen {
         Screen::Menu(state) => menu::render(frame, state),
         Screen::Aid(state) => aid::render(frame, state),

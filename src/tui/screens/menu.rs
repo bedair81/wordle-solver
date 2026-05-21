@@ -111,3 +111,22 @@ pub fn render(frame: &mut Frame, state: &MenuState) {
         chunks[2],
     );
 }
+
+pub fn render_loading(frame: &mut Frame) {
+    let area = frame.area();
+    frame.render_widget(
+        Block::default().style(ratatui::style::Style::default().bg(theme::BG)),
+        area,
+    );
+    frame.render_widget(
+        Paragraph::new("Loading word lists and pattern cache…")
+            .style(theme::title_style())
+            .alignment(Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(ratatui::style::Style::default().fg(theme::BORDER)),
+            ),
+        area,
+    );
+}

@@ -19,10 +19,15 @@ fn auto_solves_all_answers_within_six_guesses() {
     let lists = WordLists::load();
     let mut failures = Vec::new();
     let mut total_guesses = 0usize;
+    let mut worst = 0usize;
 
     for &target in &lists.answers {
         match auto_solve(&lists, target) {
-            Some(history) => total_guesses += history.len(),
+            Some(history) => {
+                let n = history.len();
+                total_guesses += n;
+                worst = worst.max(n);
+            }
             None => failures.push(target),
         }
     }
@@ -38,5 +43,67 @@ fn auto_solves_all_answers_within_six_guesses() {
     }
 
     let avg = total_guesses as f64 / lists.answers.len() as f64;
-    assert!(avg <= 3.8, "average guesses too high: {avg:.3}");
+    assert!(
+        worst <= 6,
+        "worst-case word required {worst} guesses (target <= 6)"
+    );
+    assert!(
+        avg <= 3.55,
+        "average guesses too high: {avg:.3} (target <= 3.55)"
+    );
+}
+
+#[test]
+#[ignore]
+fn quality_benchmark_stats() {
+    let lists = WordLists::load();
+    let mut total_guesses = 0usize;
+    let mut distribution = [0usize; 6];
+    let mut hardest: Vec<(Word, usize)> = Vec::new();
+
+    for &target in &lists.answers {
+        let history = auto_solve(&lists, target).expect("solver failed");
+        let n = history.len();
+        total_guesses += n;
+        distribution[n - 1] += 1;
+        hardest.push((target, n));
+    }
+
+    hardest.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let avg = total_guesses as f64 / lists.answers.len() as f64;
+    eprintln!("opening guess: {}", lists.opening_guess());
+    eprintln!("average guesses: {avg:.4}");
+    eprintln!("distribution: {:?}", distribution);
+    eprintln!(
+        "hardest: {:?}",
+        hardest
+            .iter()
+            .take(10)
+            .map(|(w, n)| format!("{w}:{n}"))
+            .collect::<Vec<_>>()
+    );
+
+    assert!(avg <= 3.55);
+    assert!(hardest[0].1 <= 6);
+}
+
+#[test]
+fn prefers_remaining_answer_on_entropy_tie() {
+    use wordle_solver::core::solver::{compare_one_ply, score_one_ply};
+    use std::collections::HashSet;
+
+    let lists = WordLists::load();
+    let crane = Word::from_str("crate").unwrap();
+    let grate = Word::from_str("grate").unwrap();
+    let slate = Word::from_str("slate").unwrap();
+    let remaining = [crane, grate];
+    let set: HashSet<Word> = remaining.iter().copied().collect();
+
+    let from_answers = score_one_ply(&lists, crane, &remaining, &set);
+    let probe = score_one_ply(&lists, slate, &remaining, &set);
+
+    if (from_answers.one_ply_entropy - probe.one_ply_entropy).abs() < 1e-9 {
+        assert!(compare_one_ply(from_answers, probe) == std::cmp::Ordering::Greater);
+    }
 }

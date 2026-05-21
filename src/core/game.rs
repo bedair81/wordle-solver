@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use crate::core::filter::filter_by_history;
 use crate::core::pattern::Pattern;
-use crate::core::solver::{satisfies_hard_mode, suggest_guess, Suggestion, OPENING_GUESS};
+use crate::core::hard_mode::satisfies_hard_mode;
+use crate::core::solver::{suggest_guess, Suggestion};
 use crate::core::word::Word;
 use crate::core::words::WordLists;
 
@@ -44,14 +45,6 @@ impl GameState {
             return None;
         }
 
-        if self.turns.is_empty() {
-            return Some(Suggestion {
-                word: OPENING_GUESS,
-                entropy: 0.0,
-                expected_remaining: self.remaining_answers.len() as f64,
-            });
-        }
-
         let history: Vec<(Word, Pattern)> = self
             .turns
             .iter()
@@ -67,11 +60,26 @@ impl GameState {
     }
 
     pub fn apply_turn(&mut self, guess: Word, pattern: Pattern) -> Result<(), GameError> {
+        self.commit_turn(guess, pattern, true)
+    }
+
+    /// Record a turn from Solver Aid — any 5-letter guess is allowed (NYT may accept
+    /// words outside our cached guess list).
+    pub fn record_turn(&mut self, guess: Word, pattern: Pattern) -> Result<(), GameError> {
+        self.commit_turn(guess, pattern, false)
+    }
+
+    fn commit_turn(
+        &mut self,
+        guess: Word,
+        pattern: Pattern,
+        require_dictionary_guess: bool,
+    ) -> Result<(), GameError> {
         if self.is_solved() || self.is_lost() {
             return Err(GameError::GameOver);
         }
 
-        if !self.word_lists.is_valid_guess(guess) {
+        if require_dictionary_guess && !self.word_lists.is_valid_guess(guess) {
             return Err(GameError::InvalidGuess(guess));
         }
 
@@ -139,9 +147,10 @@ impl std::fmt::Display for GameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GameError::InvalidGuess(w) => write!(f, "'{w}' is not a valid Wordle guess"),
-            GameError::HardModeViolation => {
-                write!(f, "guess violates hard mode (must use all greens and yellows)")
-            }
+            GameError::HardModeViolation => write!(
+                f,
+                "hard mode: use all green letters in place and include all yellow letters from prior guesses"
+            ),
             GameError::GameOver => write!(f, "game is already over"),
         }
     }

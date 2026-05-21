@@ -50,4 +50,37 @@ mod tests {
             s.as_bytes()[2] == b'a' && s.as_bytes()[3] == b't' && s.as_bytes()[4] == b'e'
         }));
     }
+
+    #[test]
+    fn agree_remains_with_nyt_feedback() {
+        use crate::core::feedback::compute_feedback;
+
+        let lists = WordLists::load();
+        let answer = w("agree");
+        let history = vec![
+            (w("audio"), compute_feedback(w("audio"), answer)),
+            (w("alter"), compute_feedback(w("alter"), answer)),
+            (w("apnea"), compute_feedback(w("apnea"), answer)),
+        ];
+        assert_eq!(history[1].1, pat("GxxGY")); // R is yellow for agree
+        let remaining = filter_by_history(&lists.answers, &history);
+        assert!(
+            remaining.contains(&answer),
+            "agree should remain; got {:?}",
+            remaining.iter().take(10).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn filters_with_guess_outside_dictionary() {
+        use crate::core::feedback::compute_feedback;
+
+        let lists = WordLists::load();
+        let answer = w("agree");
+        let off_list = w("qqqqq");
+        assert!(!lists.is_valid_guess(off_list));
+        let history = vec![(off_list, compute_feedback(off_list, answer))];
+        let remaining = filter_by_history(&lists.answers, &history);
+        assert!(remaining.contains(&answer));
+    }
 }

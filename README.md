@@ -55,16 +55,21 @@ Fully autonomous solving with no NYT interaction:
 | `g` / `y` / `x` | Set tile green / yellow / gray |
 | `Space` | Cycle tile color |
 | `←` / `→` | Move feedback cursor |
-| `h` | Toggle hard mode |
+| `h` | Toggle Hard / Regular mode |
 | `u` | Undo last turn |
 | `r` | Reset game |
 | `?` | Toggle help |
 | `Esc` | Back to menu |
 | `q` | Quit |
 
-## Hard Mode
+## Hard Mode (default)
 
-When enabled, each guess must use all known green letters in their positions and include all known yellow letters. Matches NYT hard mode rules.
+Matches NYT Wordle hard mode:
+
+- **Green** letters must stay in the same position in every later guess
+- **Yellow** letters must appear in every later guess (including duplicates when multiple yellows were shown)
+
+Press `h` during a game to switch to **Regular** mode (no guess constraints). Press `h` again to return to hard mode.
 
 ## Word Lists
 
@@ -77,9 +82,24 @@ Lists are extracted from NYT Wordle client data via community-maintained sources
 
 ## Algorithm
 
+Quality-first solver, optimized for interactive use:
+
+- **Pattern cache** — all guess×answer feedback precomputed at startup (~15s once), then O(1) lookups per scoring step
+- **Smart candidate pool** — early game uses top 800 heuristic guesses + all remaining answers; late game uses full pool or answer subset
+- **2-ply lookahead** — top 30 candidates (all guesses when ≤30 answers remain); 1-ply metrics primary, 2-ply tie-breaker
+- **Opening guess** — **SLATE** (instant, no startup computation)
+- **Multi-criteria scoring** — entropy, minimax worst bucket, expected remaining, win-aware tie-break
+
+Run a full quality report:
+
+```bash
+cargo run --release --bin solver-quality
+```
+
+Legacy notes:
+
 - **Feedback** — standard NYT rules including duplicate-letter handling
 - **Filtering** — eliminate answers inconsistent with turn history
-- **Guess selection** — maximize Shannon entropy over remaining answers; opening guess is **SLATE**
 
 The solver solves 100% of NYT answer words within 6 guesses (verified by integration test).
 
