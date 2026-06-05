@@ -47,12 +47,16 @@ impl GameState {
             self.turns.iter().map(|t| (t.guess, t.pattern)).collect();
 
         let turns_left = 6usize.saturating_sub(self.turns.len());
-        crate::core::solver::suggest_guess_with_turns(
+        let suggestion = crate::core::solver::suggest_guess_with_turns(
             &self.word_lists,
             &self.remaining_answers,
             &history,
             Some(turns_left),
-        )
+        )?;
+        if !self.word_lists.is_valid_guess(suggestion.word) {
+            return None;
+        }
+        Some(suggestion)
     }
 
     pub fn apply_turn(&mut self, guess: Word, pattern: Pattern) -> Result<(), GameError> {

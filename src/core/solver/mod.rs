@@ -70,7 +70,9 @@ pub fn compute_suggestion(
                 expected_remaining: 1.0,
             });
         }
-        return first_compliant_suggestion(word_lists, remaining_answers, history, turns_left);
+        // Do not suggest an unrelated pool word when the sole remaining answer is
+        // hard-mode-incompatible — that contradicts the candidate list in the UI.
+        return None;
     }
 
     CANDIDATE_SCRATCH.with(|scratch| {
@@ -494,30 +496,6 @@ fn score_best_probe(
         .map(|(guess, _, _)| guess)
 }
 
-fn first_compliant_suggestion(
-    word_lists: &WordLists,
-    remaining_answers: &[Word],
-    history: &[(Word, Pattern)],
-    turns_left: Option<usize>,
-) -> Option<Suggestion> {
-    CANDIDATE_SCRATCH.with(|scratch| {
-        let mut scratch = scratch.borrow_mut();
-        let pool = select_guess_candidates(
-            word_lists,
-            remaining_answers,
-            history,
-            turns_left,
-            &mut scratch,
-        );
-        let word = *pool.first()?;
-        Some(Suggestion {
-            word,
-            entropy: 0.0,
-            expected_remaining: remaining_answers.len() as f64,
-        })
-    })
-}
-
 pub fn auto_solve(word_lists: &WordLists, target: Word) -> Option<Vec<(Word, Pattern)>> {
     let mut history = Vec::new();
     let max_turns = 6;
@@ -628,6 +606,23 @@ mod tests {
                 assert!(satisfies_hard_mode(history[i].0, &prior));
             }
         }
+    }
+
+    #[test]
+    fn single_remaining_non_compliant_returns_none() {
+        let lists = WordLists::load();
+        let history = vec![(w("slate"), pat("Gxxxx"))];
+        let remaining = vec![w("crane")];
+        assert!(compute_suggestion(&lists, &remaining, &history, Some(3)).is_none());
+    }
+
+    #[test]
+    fn single_remaining_compliant_returns_that_word() {
+        let lists = WordLists::load();
+        let history = vec![(w("slate"), pat("xxxxx"))];
+        let remaining = vec![w("crane")];
+        let suggestion = compute_suggestion(&lists, &remaining, &history, Some(3)).unwrap();
+        assert_eq!(suggestion.word, w("crane"));
     }
 
     #[test]

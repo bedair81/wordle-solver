@@ -469,16 +469,39 @@ fn render_stats(frame: &mut Frame, state: &PlayState, area: ratatui::layout::Rec
         ]),
     ];
 
-    if let Some(s) = suggestion {
+    if !state.copilot && state.game.turns.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Suggested: ", theme::muted_style()),
+            Span::raw("— (after turn 1)"),
+        ]));
+    } else if let Some(s) = suggestion {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("Suggested: ", theme::muted_style()),
             Span::styled(s.word.to_string(), theme::highlight_style()),
         ]));
+        let in_remaining = state
+            .game
+            .remaining_answers()
+            .iter()
+            .any(|w| *w == s.word);
+        if !in_remaining && state.game.remaining_count() > 0 {
+            lines.push(Line::from(Span::styled(
+                "  (split probe — not in candidate list)",
+                theme::muted_style(),
+            )));
+        }
         lines.push(Line::from(vec![
             Span::styled("Entropy: ", theme::muted_style()),
             Span::raw(format!("{:.2}", s.entropy)),
         ]));
+    } else if !state.game.is_solved() && !state.game.is_lost() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Suggested: — (no compliant guess; check feedback)",
+            theme::error_style(),
+        )));
     }
 
     let block = Paragraph::new(lines).block(
