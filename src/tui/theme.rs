@@ -16,7 +16,10 @@ pub fn tile_style(tile: Tile, focused: bool) -> Style {
         Tile::Present => PRESENT,
         Tile::Absent => ABSENT,
     };
-    let mut style = Style::default().fg(Color::White).bg(bg).add_modifier(Modifier::BOLD);
+    let mut style = Style::default()
+        .fg(Color::White)
+        .bg(bg)
+        .add_modifier(Modifier::BOLD);
     if focused {
         style = style.add_modifier(Modifier::REVERSED);
     }

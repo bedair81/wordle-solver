@@ -55,7 +55,11 @@ impl PatternCache {
             .unwrap_or_else(|| pattern_bucket_index(compute_feedback(guess, answer)))
     }
 
-    pub fn build_buckets(&self, guess: Word, remaining: &[Word]) -> Option<crate::core::solver::score::BucketCounts> {
+    pub fn build_buckets(
+        &self,
+        guess: Word,
+        remaining: &[Word],
+    ) -> Option<crate::core::solver::score::BucketCounts> {
         use crate::core::solver::score::{BucketCounts, PATTERN_BUCKETS};
 
         let gi = self.guess_index.get(&guess)?;

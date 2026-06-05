@@ -2,7 +2,7 @@
 name = "wordle-solver"
 version = "0.1.0"
 edition = "2021"
-description = "NYTimes Wordle solver with TUI"
+description = "NYTimes Wordle solver with TUI; NYT hard-mode rules always enforced"
 default-run = "wordle-solver"
 
 [[bin]]

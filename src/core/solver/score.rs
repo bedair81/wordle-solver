@@ -73,6 +73,13 @@ pub fn compare_one_ply(a: GuessScore, b: GuessScore) -> std::cmp::Ordering {
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
         .then_with(|| a.is_possible_answer.cmp(&b.is_possible_answer))
+        .then_with(|| {
+            if a.is_possible_answer && b.is_possible_answer {
+                a.word.cmp(&b.word)
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
         .then_with(|| a.frequency.cmp(&b.frequency))
         .then_with(|| b.word.cmp(&a.word))
 }
@@ -102,9 +109,7 @@ pub fn score_one_ply(
     remaining: &[Word],
     remaining_set: &HashSet<Word>,
 ) -> GuessScore {
-    let buckets = word_lists
-        .pattern_cache
-        .build_buckets_for(guess, remaining);
+    let buckets = word_lists.pattern_cache.build_buckets_for(guess, remaining);
     let total = remaining.len();
     let (entropy, worst, expected) = metrics_from_buckets(&buckets, total);
 
@@ -140,7 +145,10 @@ pub fn score_two_ply(
     mut score: GuessScore,
     remaining: &[Word],
     _remaining_set: &HashSet<Word>,
+    history: &[(Word, crate::core::pattern::Pattern)],
+    turns_left: Option<usize>,
 ) -> GuessScore {
+    use crate::core::feedback::compute_feedback;
     use crate::core::solver::candidates::{followup_guess_pool, CandidateBuffer};
 
     if remaining.len() <= 1 {
@@ -167,7 +175,17 @@ pub fn score_two_ply(
             0.0
         } else {
             let subset_set: HashSet<Word> = subset.iter().copied().collect();
-            let pool = followup_guess_pool(word_lists, &subset, &mut followup_scratch);
+            let pattern = compute_feedback(score.word, subset[0]);
+            let mut extended = history.to_vec();
+            extended.push((score.word, pattern));
+            let followup_turns = turns_left.map(|left| left.saturating_sub(1));
+            let pool = followup_guess_pool(
+                word_lists,
+                &subset,
+                &extended,
+                followup_turns,
+                &mut followup_scratch,
+            );
             best_one_ply_entropy(word_lists, &subset, pool, &subset_set)
         };
         two_ply += weight * followup;

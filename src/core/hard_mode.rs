@@ -1,3 +1,6 @@
+//! NYT hard-mode letter rules (always enforced): greens stay fixed; yellow/green
+//! letters from prior guesses must appear in later guesses.
+
 use crate::core::pattern::{Pattern, Tile};
 use crate::core::word::Word;
 
@@ -14,17 +17,12 @@ pub fn known_green_letters(history: &[(Word, Pattern)]) -> [Option<u8>; 5] {
     required
 }
 
-/// Hard-mode feedback draft: greens locked at positions already revealed on prior turns.
+/// Feedback draft: greens locked at positions already revealed on prior turns.
 pub fn prefill_feedback_tiles(
-    hard_mode: bool,
     history: &[(Word, Pattern)],
     guess: Word,
 ) -> ([Option<Tile>; 5], usize) {
     let mut tiles = [None; 5];
-    if !hard_mode {
-        return (tiles, 0);
-    }
-
     let known = known_green_letters(history);
     for i in 0..5 {
         if known[i] == Some(guess.0[i]) {
@@ -32,9 +30,7 @@ pub fn prefill_feedback_tiles(
         }
     }
 
-    let cursor = (0..5)
-        .find(|&i| tiles[i].is_none())
-        .unwrap_or(0);
+    let cursor = (0..5).find(|&i| tiles[i].is_none()).unwrap_or(0);
     (tiles, cursor)
 }
 
@@ -123,7 +119,7 @@ pub fn satisfies_hard_mode(guess: Word, history: &[(Word, Pattern)]) -> bool {
 
 pub fn filter_hard_mode_compliant(pool: &[Word], history: &[(Word, Pattern)]) -> Vec<Word> {
     if history.is_empty() {
-        return pool.to_vec();
+        return pool.iter().copied().collect();
     }
     pool.iter()
         .copied()
@@ -168,10 +164,7 @@ mod tests {
 
     #[test]
     fn aggregates_constraints_across_turns() {
-        let history = vec![
-            (w("slate"), pat("Gxxxx")),
-            (w("crane"), pat("xGYYx")),
-        ];
+        let history = vec![(w("slate"), pat("Gxxxx")), (w("crane"), pat("xGYYx"))];
         assert!(satisfies_hard_mode(w("srank"), &history));
         assert!(!satisfies_hard_mode(w("crane"), &history)); // missing s at position 0
     }
@@ -196,7 +189,7 @@ mod tests {
     #[test]
     fn prefill_feedback_tiles_after_audio() {
         let history = vec![(w("audio"), pat("Gxxxx"))];
-        let (tiles, cursor) = prefill_feedback_tiles(true, &history, w("alarm"));
+        let (tiles, cursor) = prefill_feedback_tiles(&history, w("alarm"));
         assert_eq!(tiles[0], Some(Tile::Correct));
         assert_eq!(tiles[1], None);
         assert_eq!(cursor, 1);
@@ -206,5 +199,44 @@ mod tests {
     fn assemble_guess_with_fixed_greens() {
         let fixed = known_green_letters(&[(w("audio"), pat("Gxxxx"))]);
         assert_eq!(assemble_guess(&fixed, "larm"), Some(w("alarm")));
+    }
+
+    #[test]
+    fn filter_empty_history_returns_full_pool() {
+        let pool = vec![w("slate"), w("crane")];
+        let filtered = filter_hard_mode_compliant(&pool, &[]);
+        assert_eq!(filtered.len(), pool.len());
+    }
+
+    #[test]
+    fn filter_nonempty_history_is_strict_subset() {
+        let lists = crate::core::words::WordLists::load();
+        let history = vec![(w("slate"), pat("Gxxxx"))];
+        let filtered = filter_hard_mode_compliant(&lists.guess_pool, &history);
+        assert!(!filtered.is_empty());
+        assert!(filtered.len() < lists.guess_pool.len());
+        for word in &filtered {
+            assert!(satisfies_hard_mode(*word, &history));
+        }
+    }
+
+    #[test]
+    fn conflicting_greens_across_turns_rejected() {
+        let history = vec![(w("slate"), pat("Gxxxx")), (w("crane"), pat("xGxxx"))];
+        assert!(!satisfies_hard_mode(w("plane"), &history));
+    }
+
+    #[test]
+    fn impossible_min_letter_count_rejected() {
+        let history = vec![(w("speed"), pat("xxYYx"))];
+        assert!(!satisfies_hard_mode(w("lapse"), &history));
+    }
+
+    #[test]
+    fn filter_can_yield_empty_pool() {
+        let pool = vec![w("slate"), w("crane")];
+        let history = vec![(w("aaaaa"), pat("GGGGG")), (w("bbbbb"), pat("GGGGG"))];
+        let filtered = filter_hard_mode_compliant(&pool, &history);
+        assert!(filtered.is_empty());
     }
 }

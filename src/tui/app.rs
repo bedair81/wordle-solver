@@ -15,14 +15,13 @@ use wordle_solver::core::words::WordLists;
 
 use crate::tui::input::{map_key, Action, InputContext};
 use crate::tui::screens::{
-    aid, copilot, menu, simulate, InputPhase, MenuState, PlayState, SimulateState, SimulateView,
+    aid, copilot, menu, InputPhase, MenuOption, MenuState, PlayState, MENU_OPTION_COUNT,
 };
 
 pub enum Screen {
     Menu(MenuState),
     Aid(PlayState),
     Copilot(PlayState),
-    Simulate(SimulateState),
 }
 
 pub struct App {
@@ -68,19 +67,13 @@ impl App {
                     InputContext::ViewOnly
                 } else {
                     match state.phase {
-                        InputPhase::TypingGuess => InputContext::TypingWord,
+                        InputPhase::TypingGuess => InputContext::TypingWord {
+                            has_turns: !state.game.turns.is_empty(),
+                        },
                         InputPhase::SettingFeedback => InputContext::SettingFeedback,
                     }
                 }
             }
-            Screen::Simulate(state) => match state.view {
-                SimulateView::SingleSetup => InputContext::TypingWord,
-                SimulateView::Menu => InputContext::Menu,
-                SimulateView::SingleRunning
-                | SimulateView::SingleDone
-                | SimulateView::BenchmarkRunning
-                | SimulateView::BenchmarkDone => InputContext::ViewOnly,
-            },
         }
     }
 
@@ -91,25 +84,21 @@ impl App {
             Screen::Menu(state) => match action {
                 Action::Quit => self.should_quit = true,
                 Action::Up => state.move_up(),
-                Action::Down => state.move_down(3),
+                Action::Down => state.move_down(MENU_OPTION_COUNT),
                 Action::Help => state.show_help = !state.show_help,
                 Action::Submit => {
                     let Some(word_lists) = word_lists else {
                         return;
                     };
-                    match state.selected {
-                        0 => {
-                            self.screen = Screen::Aid(aid::PlayState::new(
-                                word_lists,
-                                false,
-                                "Solver Aid",
-                            ));
+                    match menu::menu_option(state.selected) {
+                        Some(MenuOption::SolverAid) => {
+                            self.screen =
+                                Screen::Aid(aid::PlayState::new(word_lists, false, "Solver Aid"));
                         }
-                        1 => {
+                        Some(MenuOption::Copilot) => {
                             self.screen = Screen::Copilot(copilot::new(word_lists));
                         }
-                        2 => self.screen = Screen::Simulate(SimulateState::new()),
-                        _ => {}
+                        None => {}
                     }
                 }
                 _ => {}
@@ -124,23 +113,11 @@ impl App {
                     self.screen = Screen::Menu(MenuState::new());
                 }
             }
-            Screen::Simulate(state) => {
-                if let Some(word_lists) = word_lists {
-                    if state.handle(action, word_lists) {
-                        self.screen = Screen::Menu(MenuState::new());
-                    }
-                }
-            }
         }
     }
 
     fn tick(&mut self) {
         self.poll_word_lists();
-
-        let word_lists = self.word_lists.clone();
-        if let (Some(word_lists), Screen::Simulate(state)) = (word_lists, &mut self.screen) {
-            state.tick(&word_lists);
-        }
     }
 }
 
@@ -200,6 +177,5 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
         Screen::Menu(state) => menu::render(frame, state),
         Screen::Aid(state) => aid::render(frame, state),
         Screen::Copilot(state) => copilot::render(frame, state),
-        Screen::Simulate(state) => simulate::render(frame, state),
     }
 }

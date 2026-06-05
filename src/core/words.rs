@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 use crate::core::patterns::PatternCache;
-use crate::core::word::Word;
 use crate::core::solver::Suggestion;
+use crate::core::word::Word;
 
 const ANSWERS_RAW: &str = include_str!("../../data/answers.txt");
 const ALLOWED_GUESSES_RAW: &str = include_str!("../../data/allowed_guesses.txt");

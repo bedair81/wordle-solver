@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use crate::core::filter::filter_by_history;
-use crate::core::pattern::Pattern;
 use crate::core::hard_mode::satisfies_hard_mode;
-use crate::core::solver::{suggest_guess, Suggestion};
+use crate::core::pattern::Pattern;
+use crate::core::solver::Suggestion;
 use crate::core::word::Word;
 use crate::core::words::WordLists;
 
@@ -17,17 +17,15 @@ pub struct Turn {
 pub struct GameState {
     pub turns: Vec<Turn>,
     pub word_lists: Arc<WordLists>,
-    pub hard_mode: bool,
     remaining_answers: Vec<Word>,
 }
 
 impl GameState {
-    pub fn new(word_lists: Arc<WordLists>, hard_mode: bool) -> Self {
+    pub fn new(word_lists: Arc<WordLists>) -> Self {
         let remaining_answers = word_lists.answers.clone();
         Self {
             turns: Vec::new(),
             word_lists,
-            hard_mode,
             remaining_answers,
         }
     }
@@ -45,17 +43,15 @@ impl GameState {
             return None;
         }
 
-        let history: Vec<(Word, Pattern)> = self
-            .turns
-            .iter()
-            .map(|t| (t.guess, t.pattern))
-            .collect();
+        let history: Vec<(Word, Pattern)> =
+            self.turns.iter().map(|t| (t.guess, t.pattern)).collect();
 
-        suggest_guess(
+        let turns_left = 6usize.saturating_sub(self.turns.len());
+        crate::core::solver::suggest_guess_with_turns(
             &self.word_lists,
             &self.remaining_answers,
             &history,
-            self.hard_mode,
+            Some(turns_left),
         )
     }
 
@@ -83,15 +79,10 @@ impl GameState {
             return Err(GameError::InvalidGuess(guess));
         }
 
-        if self.hard_mode {
-            let history: Vec<(Word, Pattern)> = self
-                .turns
-                .iter()
-                .map(|t| (t.guess, t.pattern))
-                .collect();
-            if !satisfies_hard_mode(guess, &history) {
-                return Err(GameError::HardModeViolation);
-            }
+        let history: Vec<(Word, Pattern)> =
+            self.turns.iter().map(|t| (t.guess, t.pattern)).collect();
+        if !satisfies_hard_mode(guess, &history) {
+            return Err(GameError::HardModeViolation);
         }
 
         self.turns.push(Turn { guess, pattern });
@@ -113,12 +104,11 @@ impl GameState {
         self.remaining_answers = self.word_lists.answers.clone();
     }
 
-    pub fn toggle_hard_mode(&mut self) {
-        self.hard_mode = !self.hard_mode;
-    }
-
     pub fn is_solved(&self) -> bool {
-        self.turns.last().map(|t| t.pattern.is_win()).unwrap_or(false)
+        self.turns
+            .last()
+            .map(|t| t.pattern.is_win())
+            .unwrap_or(false)
     }
 
     pub fn is_lost(&self) -> bool {
@@ -126,13 +116,9 @@ impl GameState {
     }
 
     fn recompute_remaining(&mut self) {
-        let history: Vec<(Word, Pattern)> = self
-            .turns
-            .iter()
-            .map(|t| (t.guess, t.pattern))
-            .collect();
-        self.remaining_answers =
-            filter_by_history(&self.word_lists.answers, &history);
+        let history: Vec<(Word, Pattern)> =
+            self.turns.iter().map(|t| (t.guess, t.pattern)).collect();
+        self.remaining_answers = filter_by_history(&self.word_lists.answers, &history);
     }
 }
 
@@ -149,7 +135,7 @@ impl std::fmt::Display for GameError {
             GameError::InvalidGuess(w) => write!(f, "'{w}' is not a valid Wordle guess"),
             GameError::HardModeViolation => write!(
                 f,
-                "hard mode: use all green letters in place and include all yellow letters from prior guesses"
+                "NYT hard mode: keep green letters in place and include all yellow letters from prior guesses"
             ),
             GameError::GameOver => write!(f, "game is already over"),
         }
@@ -157,3 +143,88 @@ impl std::fmt::Display for GameError {
 }
 
 impl std::error::Error for GameError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::pattern::Pattern;
+    use crate::core::word::Word;
+    use std::sync::Arc;
+
+    fn w(s: &str) -> Word {
+        Word::from_str(s).unwrap()
+    }
+
+    fn pat(s: &str) -> Pattern {
+        Pattern::from_str(s).unwrap()
+    }
+
+    fn game() -> GameState {
+        GameState::new(Arc::new(crate::core::words::WordLists::load()))
+    }
+
+    #[test]
+    fn record_turn_accepts_compliant_guess() {
+        let mut game = game();
+        let guess = w("slate");
+        assert!(game.record_turn(guess, pat("Gxxxx")).is_ok());
+    }
+
+    #[test]
+    fn record_turn_rejects_wrong_green_position() {
+        let mut game = game();
+        game.record_turn(w("slate"), pat("Gxxxx")).unwrap();
+        assert_eq!(
+            game.record_turn(w("plate"), pat("xxxxx")),
+            Err(GameError::HardModeViolation)
+        );
+    }
+
+    #[test]
+    fn apply_turn_rejects_missing_yellow_letter() {
+        let mut game = game();
+        game.record_turn(w("crane"), pat("xxxYx")).unwrap();
+        assert_eq!(
+            game.apply_turn(w("slate"), pat("xxxxx")),
+            Err(GameError::HardModeViolation)
+        );
+    }
+
+    #[test]
+    fn apply_turn_rejects_invalid_guess_word() {
+        let mut game = game();
+        let not_in_lists = w("qqqqq");
+        assert_eq!(
+            game.apply_turn(not_in_lists, pat("xxxxx")),
+            Err(GameError::InvalidGuess(not_in_lists))
+        );
+    }
+
+    #[test]
+    fn record_turn_accepts_off_list_word() {
+        let mut game = game();
+        let off_list = w("qqqqq");
+        assert!(game.record_turn(off_list, pat("xxxxx")).is_ok());
+    }
+
+    #[test]
+    fn suggest_next_none_when_game_over() {
+        let mut game = game();
+        for _ in 0..6 {
+            game.record_turn(w("slate"), pat("xxxxx")).unwrap();
+        }
+        assert!(game.is_lost());
+        assert!(game.suggest_next().is_none());
+    }
+
+    #[test]
+    fn commit_after_solved_returns_game_over() {
+        let mut game = game();
+        game.record_turn(w("slate"), pat("GGGGG")).unwrap();
+        assert!(game.is_solved());
+        assert_eq!(
+            game.record_turn(w("crane"), pat("xxxxx")),
+            Err(GameError::GameOver)
+        );
+    }
+}

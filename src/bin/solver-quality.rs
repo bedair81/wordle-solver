@@ -7,7 +7,7 @@ use wordle_solver::core::words::WordLists;
 fn main() {
     let lists = WordLists::load();
     let opening = lists.opening_guess();
-    println!("Computed opening guess: {opening}");
+    println!("Configured opening guess: {opening}");
     println!();
 
     let mut total_guesses = 0usize;

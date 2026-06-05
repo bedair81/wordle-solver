@@ -8,9 +8,10 @@ use ratatui::{
 };
 
 use wordle_solver::core::feedback::compute_feedback;
-use wordle_solver::core::game::GameState;
+use wordle_solver::core::game::{GameError, GameState};
 use wordle_solver::core::hard_mode::{
     assemble_guess, editable_slot_count, known_green_letters, prefill_feedback_tiles,
+    satisfies_hard_mode,
 };
 use wordle_solver::core::pattern::{Pattern, Tile};
 use wordle_solver::core::solver::Suggestion;
@@ -47,7 +48,7 @@ pub struct PlayState {
 impl PlayState {
     pub fn new(word_lists: Arc<WordLists>, copilot: bool, title: &'static str) -> Self {
         let mut state = Self {
-            game: GameState::new(word_lists, true),
+            game: GameState::new(word_lists),
             copilot,
             phase: if copilot {
                 InputPhase::SettingFeedback
@@ -84,9 +85,23 @@ impl PlayState {
     }
 
     fn sync_copilot_guess(&mut self) {
-        if let Some(word) = self.cached_suggestion.as_ref().map(|s| s.word) {
-            self.guess_buffer = word.as_str().to_string();
-            self.begin_feedback_phase(word);
+        let Some(word) = self.cached_suggestion.as_ref().map(|s| s.word) else {
+            self.guess_buffer.clear();
+            self.pending_guess = None;
+            self.feedback_tiles = [None; 5];
+            self.feedback_cursor = 0;
+            self.error = Some(
+                "No NYT hard-mode-compliant guess available — check turn history or remaining candidates."
+                    .into(),
+            );
+            return;
+        };
+        self.guess_buffer = word.as_str().to_string();
+        if !self.begin_feedback_phase(word) {
+            self.error = Some(
+                "Solver could not suggest a NYT hard-mode-compliant guess — check turn history."
+                    .into(),
+            );
         }
     }
 
@@ -99,11 +114,7 @@ impl PlayState {
     }
 
     fn begin_typing_phase(&mut self) {
-        self.fixed_letters = if self.game.hard_mode {
-            known_green_letters(&self.turn_history())
-        } else {
-            [None; 5]
-        };
+        self.fixed_letters = known_green_letters(&self.turn_history());
         self.guess_buffer.clear();
         self.pending_guess = None;
         self.feedback_tiles = [None; 5];
@@ -111,20 +122,23 @@ impl PlayState {
         self.phase = InputPhase::TypingGuess;
     }
 
-    fn begin_feedback_phase(&mut self, guess: Word) {
+    fn begin_feedback_phase(&mut self, guess: Word) -> bool {
+        let history = self.turn_history();
+        if !satisfies_hard_mode(guess, &history) {
+            self.error = Some(GameError::HardModeViolation.to_string());
+            return false;
+        }
+        self.error = None;
         self.pending_guess = Some(guess);
-        let (tiles, cursor) = prefill_feedback_tiles(
-            self.game.hard_mode,
-            &self.turn_history(),
-            guess,
-        );
+        let (tiles, cursor) = prefill_feedback_tiles(&history, guess);
         self.feedback_tiles = tiles;
         self.feedback_cursor = cursor;
         self.phase = InputPhase::SettingFeedback;
+        true
     }
 
     fn is_feedback_locked(&self, index: usize) -> bool {
-        self.game.hard_mode && self.feedback_tiles[index] == Some(Tile::Correct)
+        self.feedback_tiles[index] == Some(Tile::Correct)
     }
 
     fn move_feedback_cursor(&mut self, delta: i32) {
@@ -166,20 +180,6 @@ impl PlayState {
             Action::Back => return true,
             Action::Help => {
                 self.show_help = !self.show_help;
-            }
-            Action::ToggleHardMode => {
-                self.game.toggle_hard_mode();
-                self.error = None;
-                self.refresh_suggestion();
-                if self.phase == InputPhase::SettingFeedback {
-                    if let Some(guess) = self.active_guess() {
-                        self.begin_feedback_phase(guess);
-                    }
-                } else if self.phase == InputPhase::TypingGuess {
-                    self.begin_typing_phase();
-                } else if self.copilot {
-                    self.sync_copilot_guess();
-                }
             }
             Action::Undo => {
                 if self.game.undo_turn() {
@@ -287,7 +287,9 @@ impl PlayState {
                 } else {
                     None
                 };
-                self.begin_feedback_phase(word);
+                if !self.begin_feedback_phase(word) {
+                    return;
+                }
             }
             InputPhase::SettingFeedback => {
                 if self.feedback_tiles.iter().any(|t| t.is_none()) {
@@ -330,14 +332,9 @@ impl PlayState {
             }
         }
     }
-
 }
 
-fn empty_candidate_warning(
-    game: &GameState,
-    guess: Word,
-    pattern: Pattern,
-) -> Option<String> {
+fn empty_candidate_warning(game: &GameState, guess: Word, pattern: Pattern) -> Option<String> {
     if game.is_solved() || game.remaining_count() > 0 {
         return None;
     }
@@ -380,12 +377,7 @@ pub fn render(frame: &mut Frame, state: &mut PlayState) {
         ])
         .split(area);
 
-    let mode = if state.game.hard_mode {
-        "Hard (NYT)"
-    } else {
-        "Regular"
-    };
-    let header = Paragraph::new(format!("{}  |  Mode: {mode}", state.title))
+    let header = Paragraph::new(state.title)
         .style(theme::title_style())
         .alignment(Alignment::Center)
         .block(
@@ -561,12 +553,18 @@ fn render_input(frame: &mut Frame, state: &PlayState, area: ratatui::layout::Rec
     } else {
         match state.phase {
             InputPhase::TypingGuess => {
-                if state.game.hard_mode && state.fixed_letters.iter().any(|slot| slot.is_some()) {
+                if state.fixed_letters.iter().any(|slot| slot.is_some()) {
                     lines.push(Line::from(
-                        "Green tiles are locked from prior turns — type the remaining letters:",
+                        "NYT hard mode: green tiles locked — type remaining letters (include yellows from prior turns):",
+                    ));
+                } else if !state.game.turns.is_empty() {
+                    lines.push(Line::from(
+                        "NYT hard mode: include all yellow letters from prior turns, then Enter for feedback:",
                     ));
                 } else {
-                    lines.push(Line::from("Type your guess, then Enter to set NYT feedback:"));
+                    lines.push(Line::from(
+                        "Type your guess, then Enter to set NYT feedback:",
+                    ));
                 }
             }
             InputPhase::SettingFeedback => {
@@ -607,7 +605,7 @@ fn render_input(frame: &mut Frame, state: &PlayState, area: ratatui::layout::Rec
                     word: None,
                     pattern: None,
                     buffer: Some(&state.guess_buffer),
-                    fixed_letters: if state.game.hard_mode && state.fixed_letters.iter().any(|s| s.is_some()) {
+                    fixed_letters: if state.fixed_letters.iter().any(|s| s.is_some()) {
                         Some(state.fixed_letters)
                     } else {
                         None
@@ -633,19 +631,50 @@ fn render_input(frame: &mut Frame, state: &PlayState, area: ratatui::layout::Rec
     frame.render_widget(block, area);
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn begin_feedback_phase_rejects_hard_mode_violation() {
+        let lists = Arc::new(WordLists::load());
+        let mut state = PlayState::new(lists, false, "Solver Aid");
+        state
+            .game
+            .record_turn(Word::from_str("slate").unwrap(), Pattern::from_str("Gxxxx").unwrap())
+            .unwrap();
+        let bad = Word::from_str("plate").unwrap();
+        assert!(!state.begin_feedback_phase(bad));
+        assert!(state.error.is_some());
+    }
+}
+
 fn footer_text(state: &PlayState) -> String {
     if state.show_help {
-        return "g/y/x or Space cycle tiles | ←/→ move cursor | Enter commit | u undo | r reset | h regular mode | Esc back | q quit".into();
+        let undo_reset = match state.phase {
+            InputPhase::TypingGuess if state.game.turns.is_empty() => {
+                "(turn 1 typing: u/r are letters) | "
+            }
+            _ => "u undo | r reset | ",
+        };
+        return format!(
+            "NYT hard mode: locked greens, required yellows. g/y/x or Space tiles | ←/→ cursor | Enter commit | {undo_reset}Esc back | q quit"
+        );
     }
     if state.game.is_solved() || state.game.is_lost() {
         return "r reset | Esc back | q quit | ? help".into();
     }
     match state.phase {
         InputPhase::TypingGuess => {
-            "Type guess | Enter next | ↑/↓ scroll | h regular mode | u undo | r reset | ? help".into()
+            if state.game.turns.is_empty() {
+                "Type guess | Enter next | ↑/↓ scroll | ? help (turn 1: u/r are letters)".into()
+            } else {
+                "Type guess | Enter next | ↑/↓ scroll | u undo | r reset | ? help".into()
+            }
         }
         InputPhase::SettingFeedback => {
-            "g/y/x tiles | Enter commit | ←/→ cursor | h regular mode | u undo | r reset | ? help".into()
+            "g/y/x tiles | Enter commit | ←/→ cursor | u undo | r reset | ? help".into()
         }
     }
 }

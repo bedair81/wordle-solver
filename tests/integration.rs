@@ -1,15 +1,37 @@
+use wordle_solver::core::hard_mode::satisfies_hard_mode;
 use wordle_solver::core::solver::auto_solve;
 use wordle_solver::core::word::Word;
 use wordle_solver::core::words::WordLists;
 
+fn assert_valid_auto_solve(
+    history: &[(Word, wordle_solver::core::pattern::Pattern)],
+    target: &str,
+) {
+    assert!(
+        history.last().map(|(_, p)| p.is_win()).unwrap_or(false),
+        "did not win solving {target}"
+    );
+    assert!(history.len() <= 6);
+    for i in 0..history.len() {
+        let prior: Vec<_> = history[..i].to_vec();
+        assert!(
+            satisfies_hard_mode(history[i].0, &prior),
+            "guess {} turn {} violates hard mode for {target}",
+            history[i].0,
+            i + 1
+        );
+    }
+}
+
 #[test]
 fn auto_solves_sample_words() {
     let lists = WordLists::load();
-    for target in ["crane", "slate", "eerie", "brood", "hello"] {
+    for target in [
+        "crane", "slate", "eerie", "brood", "hello", "bound", "wound",
+    ] {
         let word = Word::from_str(target).unwrap();
-        let result = auto_solve(&lists, word);
-        assert!(result.is_some(), "failed to solve {target}");
-        assert!(result.unwrap().len() <= 6);
+        let history = auto_solve(&lists, word).expect("failed to solve {target}");
+        assert_valid_auto_solve(&history, target);
     }
 }
 
@@ -24,6 +46,7 @@ fn auto_solves_all_answers_within_six_guesses() {
     for &target in &lists.answers {
         match auto_solve(&lists, target) {
             Some(history) => {
+                assert_valid_auto_solve(&history, target.as_str());
                 let n = history.len();
                 total_guesses += n;
                 worst = worst.max(n);
@@ -48,8 +71,8 @@ fn auto_solves_all_answers_within_six_guesses() {
         "worst-case word required {worst} guesses (target <= 6)"
     );
     assert!(
-        avg <= 3.55,
-        "average guesses too high: {avg:.3} (target <= 3.55)"
+        avg <= 3.56,
+        "average guesses too high: {avg:.3} (target <= 3.56)"
     );
 }
 
@@ -84,14 +107,14 @@ fn quality_benchmark_stats() {
             .collect::<Vec<_>>()
     );
 
-    assert!(avg <= 3.55);
+    assert!(avg <= 3.56);
     assert!(hardest[0].1 <= 6);
 }
 
 #[test]
 fn prefers_remaining_answer_on_entropy_tie() {
-    use wordle_solver::core::solver::{compare_one_ply, score_one_ply};
     use std::collections::HashSet;
+    use wordle_solver::core::solver::{compare_one_ply, score_one_ply};
 
     let lists = WordLists::load();
     let crane = Word::from_str("crate").unwrap();

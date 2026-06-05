@@ -1,9 +1,4 @@
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::Style,
-    widgets::Widget,
-};
+use ratatui::{buffer::Buffer, layout::Rect, style::Style, widgets::Widget};
 
 use wordle_solver::core::pattern::{Pattern, Tile};
 use wordle_solver::core::word::Word;
@@ -14,7 +9,7 @@ pub struct TileRow<'a> {
     pub word: Option<Word>,
     pub pattern: Option<Pattern>,
     pub buffer: Option<&'a str>,
-    /// Hard-mode letters locked at each position while typing a guess.
+    /// NYT hard-mode green tiles from prior turns, fixed while typing a guess.
     pub fixed_letters: Option<[Option<u8>; 5]>,
     pub feedback_draft: Option<[Option<Tile>; 5]>,
     pub feedback_cursor: Option<usize>,
@@ -51,11 +46,7 @@ impl TileRow<'_> {
             pattern.tiles[i]
         } else if let Some(draft) = self.feedback_draft {
             draft[i].unwrap_or(Tile::Absent)
-        } else if self
-            .fixed_letters
-            .and_then(|fixed| fixed[i])
-            .is_some()
-        {
+        } else if self.fixed_letters.and_then(|fixed| fixed[i]).is_some() {
             Tile::Correct
         } else {
             Tile::Absent

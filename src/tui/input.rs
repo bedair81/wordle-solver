@@ -7,7 +7,6 @@ pub enum Action {
     Up,
     Down,
     Help,
-    ToggleHardMode,
     Undo,
     Reset,
     Char(char),
@@ -25,8 +24,10 @@ pub enum Action {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum InputContext {
     Menu,
-    /// Typing a 5-letter word (Solver Aid guess or simulate target).
-    TypingWord,
+    /// Typing a 5-letter guess (Solver Aid). Undo/reset available when `has_turns`.
+    TypingWord {
+        has_turns: bool,
+    },
     /// Setting NYT tile feedback colors.
     SettingFeedback,
     /// Read-only / results screens (shortcuts only, no typing).
@@ -35,7 +36,7 @@ pub enum InputContext {
 
 impl InputContext {
     fn allows_typing(self) -> bool {
-        matches!(self, InputContext::TypingWord)
+        matches!(self, InputContext::TypingWord { .. })
     }
 
     fn allows_tile_keys(self) -> bool {
@@ -43,7 +44,11 @@ impl InputContext {
     }
 
     fn allows_play_shortcuts(self) -> bool {
-        matches!(self, InputContext::SettingFeedback | InputContext::ViewOnly)
+        match self {
+            InputContext::SettingFeedback | InputContext::ViewOnly => true,
+            InputContext::TypingWord { has_turns } => has_turns,
+            InputContext::Menu => false,
+        }
     }
 }
 
@@ -56,9 +61,6 @@ pub fn map_key(event: KeyEvent, ctx: InputContext) -> Option<Action> {
         KeyCode::Down => Some(Action::Down),
         KeyCode::Enter => Some(Action::Submit),
         KeyCode::Char('?') => Some(Action::Help),
-        KeyCode::Char('h') if event.modifiers.is_empty() && ctx.allows_play_shortcuts() => {
-            Some(Action::ToggleHardMode)
-        }
         KeyCode::Char('u') if ctx.allows_play_shortcuts() => Some(Action::Undo),
         KeyCode::Char('r') if ctx.allows_play_shortcuts() => Some(Action::Reset),
         KeyCode::Backspace if ctx.allows_typing() => Some(Action::Delete),
@@ -90,14 +92,34 @@ mod tests {
     }
 
     #[test]
-    fn typing_word_accepts_r_and_g() {
+    fn typing_word_accepts_r_and_g_without_turns() {
         assert!(matches!(
-            map_key(key('r'), InputContext::TypingWord),
+            map_key(key('r'), InputContext::TypingWord { has_turns: false }),
             Some(Action::Char('r'))
         ));
         assert!(matches!(
-            map_key(key('g'), InputContext::TypingWord),
+            map_key(key('g'), InputContext::TypingWord { has_turns: false }),
             Some(Action::Char('g'))
+        ));
+    }
+
+    #[test]
+    fn typing_word_with_turns_maps_r_to_reset() {
+        assert!(matches!(
+            map_key(key('r'), InputContext::TypingWord { has_turns: true }),
+            Some(Action::Reset)
+        ));
+    }
+
+    #[test]
+    fn typing_word_accepts_h_as_letter() {
+        assert!(matches!(
+            map_key(key('h'), InputContext::TypingWord { has_turns: false }),
+            Some(Action::Char('h'))
+        ));
+        assert!(matches!(
+            map_key(key('h'), InputContext::SettingFeedback),
+            None
         ));
     }
 

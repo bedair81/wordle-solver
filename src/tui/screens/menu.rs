@@ -35,10 +35,50 @@ impl MenuState {
 }
 
 const OPTIONS: &[(&str, &str)] = &[
-    ("Solver Aid", "Enter your guesses + NYT feedback; filter answers"),
-    ("Copilot", "Solver picks guesses; you enter feedback from NYT"),
-    ("Simulate", "Autonomous play: single word or full benchmark"),
+    (
+        "Solver Aid",
+        "Enter your guesses + NYT feedback; filter answers",
+    ),
+    (
+        "Copilot",
+        "Solver picks guesses; you enter feedback from NYT",
+    ),
 ];
+
+pub const MENU_OPTION_COUNT: usize = OPTIONS.len();
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuOption {
+    SolverAid,
+    Copilot,
+}
+
+pub fn menu_option(selected: usize) -> Option<MenuOption> {
+    match selected {
+        0 => Some(MenuOption::SolverAid),
+        1 => Some(MenuOption::Copilot),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_navigation_clamps() {
+        let mut state = MenuState::new();
+        assert_eq!(state.selected, 0);
+        state.move_up();
+        assert_eq!(state.selected, 0);
+        state.move_down(MENU_OPTION_COUNT);
+        assert_eq!(state.selected, MENU_OPTION_COUNT - 1);
+        state.move_down(MENU_OPTION_COUNT);
+        assert_eq!(state.selected, MENU_OPTION_COUNT - 1);
+        state.move_up();
+        assert_eq!(state.selected, MENU_OPTION_COUNT - 2);
+    }
+}
 
 pub fn render(frame: &mut Frame, state: &MenuState) {
     let area = frame.area();
@@ -77,7 +117,10 @@ pub fn render(frame: &mut Frame, state: &MenuState) {
                 ratatui::style::Style::default().fg(theme::FG)
             };
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{marker} {name}"), style.add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{marker} {name}"),
+                    style.add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("  "),
                 Span::styled(*desc, theme::muted_style()),
             ]))
@@ -86,7 +129,7 @@ pub fn render(frame: &mut Frame, state: &MenuState) {
 
     let list = List::new(items).block(
         Block::default()
-            .title("Select mode")
+            .title("Choose play style")
             .borders(Borders::ALL)
             .border_style(ratatui::style::Style::default().fg(theme::BORDER)),
     );
@@ -94,13 +137,13 @@ pub fn render(frame: &mut Frame, state: &MenuState) {
 
     let footer = if state.show_help {
         Paragraph::new(
-            "Solver Aid: manual guesses. Copilot: auto suggestions. Simulate: benchmark.\n\
+            "Solver Aid: manual guesses. Copilot: auto suggestions.\n\
+             NYT hard mode always on (locked greens, required yellows).\n\
              Enter select | q quit | Esc back",
         )
         .style(theme::muted_style())
     } else {
-        Paragraph::new("↑/↓ navigate | Enter select | ? help | q quit")
-            .style(theme::muted_style())
+        Paragraph::new("↑/↓ navigate | Enter select | ? help | q quit").style(theme::muted_style())
     };
     frame.render_widget(
         footer.alignment(Alignment::Center).block(
