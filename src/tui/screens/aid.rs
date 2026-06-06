@@ -682,11 +682,10 @@ mod tests {
 
 fn footer_text(state: &PlayState) -> String {
     if state.show_help {
-        let undo_reset = match state.phase {
-            InputPhase::TypingGuess if state.game.turns.is_empty() => {
-                "(turn 1 typing: u/r are letters) | "
-            }
-            _ => "u undo | r reset | ",
+        let undo_reset = if state.phase == InputPhase::TypingGuess {
+            ""
+        } else {
+            "u undo | r reset | "
         };
         return format!(
             "NYT hard mode: locked greens, required yellows. g/y/x or Space tiles | ←/→ cursor | Enter commit | {undo_reset}Esc back | q quit"
@@ -697,11 +696,7 @@ fn footer_text(state: &PlayState) -> String {
     }
     match state.phase {
         InputPhase::TypingGuess => {
-            if state.game.turns.is_empty() {
-                "Type guess | Enter next | ↑/↓ scroll | ? help (turn 1: u/r are letters)".into()
-            } else {
-                "Type guess | Enter next | ↑/↓ scroll | u undo | r reset | ? help".into()
-            }
+            "Type guess | Enter next | ↑/↓ scroll | ? help".into()
         }
         InputPhase::SettingFeedback => {
             "g/y/x tiles | Enter commit | ←/→ cursor | u undo | r reset | ? help".into()

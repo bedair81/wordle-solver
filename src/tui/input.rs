@@ -24,10 +24,8 @@ pub enum Action {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum InputContext {
     Menu,
-    /// Typing a 5-letter guess (Solver Aid). Undo/reset available when `has_turns`.
-    TypingWord {
-        has_turns: bool,
-    },
+    /// Typing a 5-letter guess (Solver Aid). All letters type into the word; u/r are not shortcuts here.
+    TypingWord,
     /// Setting NYT tile feedback colors.
     SettingFeedback,
     /// Read-only / results screens (shortcuts only, no typing).
@@ -44,11 +42,10 @@ impl InputContext {
     }
 
     fn allows_play_shortcuts(self) -> bool {
-        match self {
-            InputContext::SettingFeedback | InputContext::ViewOnly => true,
-            InputContext::TypingWord { has_turns } => has_turns,
-            InputContext::Menu => false,
-        }
+        matches!(
+            self,
+            InputContext::SettingFeedback | InputContext::ViewOnly
+        )
     }
 }
 
@@ -92,29 +89,19 @@ mod tests {
     }
 
     #[test]
-    fn typing_word_accepts_r_and_g_without_turns() {
-        assert!(matches!(
-            map_key(key('r'), InputContext::TypingWord { has_turns: false }),
-            Some(Action::Char('r'))
-        ));
-        assert!(matches!(
-            map_key(key('g'), InputContext::TypingWord { has_turns: false }),
-            Some(Action::Char('g'))
-        ));
-    }
-
-    #[test]
-    fn typing_word_with_turns_maps_r_to_reset() {
-        assert!(matches!(
-            map_key(key('r'), InputContext::TypingWord { has_turns: true }),
-            Some(Action::Reset)
-        ));
+    fn typing_word_accepts_shortcut_letters_as_input() {
+        for c in ['r', 'u', 'g'] {
+            assert!(
+                matches!(map_key(key(c), InputContext::TypingWord), Some(Action::Char(l)) if l == c),
+                "{c} should type as a letter while entering a guess"
+            );
+        }
     }
 
     #[test]
     fn typing_word_accepts_h_as_letter() {
         assert!(matches!(
-            map_key(key('h'), InputContext::TypingWord { has_turns: false }),
+            map_key(key('h'), InputContext::TypingWord),
             Some(Action::Char('h'))
         ));
         assert!(matches!(

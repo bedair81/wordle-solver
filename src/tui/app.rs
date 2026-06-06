@@ -67,9 +67,7 @@ impl App {
                     InputContext::ViewOnly
                 } else {
                     match state.phase {
-                        InputPhase::TypingGuess => InputContext::TypingWord {
-                            has_turns: !state.game.turns.is_empty(),
-                        },
+                        InputPhase::TypingGuess => InputContext::TypingWord,
                         InputPhase::SettingFeedback => InputContext::SettingFeedback,
                     }
                 }

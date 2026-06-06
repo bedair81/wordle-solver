@@ -62,7 +62,7 @@ Copilot only suggests words from our bundled guess list (NYT-legal guesses). Sol
 | `Esc` | Back to menu |
 | `q` | Quit |
 
-While typing the first guess of a game, `u`/`r` type as letters; from the second guess onward they undo/reset.
+While typing a guess, all letters (including `u` and `r`) go into the word. `u` undo and `r` reset are only active in the feedback phase or after the game ends.
 
 ## Guess Rules (NYT Hard Mode)
 
