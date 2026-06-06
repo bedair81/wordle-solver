@@ -22,7 +22,7 @@ use crate::tui::input::Action;
 use crate::tui::theme;
 use crate::tui::widgets::TileRow;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputPhase {
     TypingGuess,
     SettingFeedback,
@@ -67,8 +67,8 @@ impl PlayState {
             fixed_letters: [None; 5],
             pending_guess: None,
         };
+        state.refresh_suggestion();
         if state.copilot {
-            state.refresh_suggestion();
             state.sync_copilot_guess();
         } else {
             state.begin_typing_phase();
@@ -77,10 +77,6 @@ impl PlayState {
     }
 
     fn refresh_suggestion(&mut self) {
-        if !self.copilot && self.game.turns.is_empty() {
-            self.cached_suggestion = None;
-            return;
-        }
         self.cached_suggestion = self.game.suggest_next();
     }
 
@@ -469,13 +465,7 @@ fn render_stats(frame: &mut Frame, state: &PlayState, area: ratatui::layout::Rec
         ]),
     ];
 
-    if !state.copilot && state.game.turns.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("Suggested: ", theme::muted_style()),
-            Span::raw("— (after turn 1)"),
-        ]));
-    } else if let Some(s) = suggestion {
+    if let Some(s) = suggestion {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("Suggested: ", theme::muted_style()),
@@ -670,6 +660,23 @@ mod tests {
         let bad = Word::from_str("plate").unwrap();
         assert!(!state.begin_feedback_phase(bad));
         assert!(state.error.is_some());
+    }
+
+    #[test]
+    fn solver_aid_shows_opening_suggestion_before_first_turn() {
+        let lists = Arc::new(WordLists::load());
+        let state = PlayState::new(lists, false, "Solver Aid");
+        assert!(state.cached_suggestion().is_some());
+        assert_eq!(state.phase, InputPhase::TypingGuess);
+    }
+
+    #[test]
+    fn copilot_starts_with_cached_opening_suggestion() {
+        let lists = Arc::new(WordLists::load());
+        let state = PlayState::new(lists, true, "Copilot");
+        assert!(state.cached_suggestion().is_some());
+        assert!(state.active_guess().is_some());
+        assert_eq!(state.phase, InputPhase::SettingFeedback);
     }
 }
 
