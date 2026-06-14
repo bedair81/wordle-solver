@@ -62,7 +62,7 @@ impl Widget for TileRow<'_> {
         let start_x = area.x + (area.width.saturating_sub(total_width)) / 2;
 
         for i in 0..5 {
-            let x = start_x + (i as u16) * (cell_width + gap as u16);
+            let x = start_x + (i as u16) * (cell_width + gap);
             if x + cell_width > area.right() {
                 break;
             }

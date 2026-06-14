@@ -283,6 +283,7 @@ impl PlayState {
                 } else {
                     None
                 };
+                #[allow(clippy::needless_return)]
                 if !self.begin_feedback_phase(word) {
                     return;
                 }
@@ -471,11 +472,7 @@ fn render_stats(frame: &mut Frame, state: &PlayState, area: ratatui::layout::Rec
             Span::styled("Suggested: ", theme::muted_style()),
             Span::styled(s.word.to_string(), theme::highlight_style()),
         ]));
-        let in_remaining = state
-            .game
-            .remaining_answers()
-            .iter()
-            .any(|w| *w == s.word);
+        let in_remaining = state.game.remaining_answers().contains(&s.word);
         if !in_remaining && state.game.remaining_count() > 0 {
             lines.push(Line::from(Span::styled(
                 "  (split probe — not in candidate list)",
@@ -483,7 +480,7 @@ fn render_stats(frame: &mut Frame, state: &PlayState, area: ratatui::layout::Rec
             )));
         }
         lines.push(Line::from(vec![
-            Span::styled("Entropy: ", theme::muted_style()),
+            Span::styled("Score: ", theme::muted_style()),
             Span::raw(format!("{:.2}", s.entropy)),
         ]));
     } else if !state.game.is_solved() && !state.game.is_lost() {
@@ -655,7 +652,10 @@ mod tests {
         let mut state = PlayState::new(lists, false, "Solver Aid");
         state
             .game
-            .record_turn(Word::from_str("slate").unwrap(), Pattern::from_str("Gxxxx").unwrap())
+            .record_turn(
+                Word::from_str("slate").unwrap(),
+                Pattern::from_str("Gxxxx").unwrap(),
+            )
             .unwrap();
         let bad = Word::from_str("plate").unwrap();
         assert!(!state.begin_feedback_phase(bad));
@@ -692,12 +692,10 @@ fn footer_text(state: &PlayState) -> String {
         );
     }
     if state.game.is_solved() || state.game.is_lost() {
-        return "r reset | Esc back | q quit | ? help".into();
+        return "u undo | r reset | Esc back | q quit | ? help".into();
     }
     match state.phase {
-        InputPhase::TypingGuess => {
-            "Type guess | Enter next | ↑/↓ scroll | ? help".into()
-        }
+        InputPhase::TypingGuess => "Type guess | Enter next | ↑/↓ scroll | ? help".into(),
         InputPhase::SettingFeedback => {
             "g/y/x tiles | Enter commit | ←/→ cursor | u undo | r reset | ? help".into()
         }

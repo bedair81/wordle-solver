@@ -8,8 +8,8 @@ use crate::core::word::Word;
 pub fn known_green_letters(history: &[(Word, Pattern)]) -> [Option<u8>; 5] {
     let mut required = [None::<u8>; 5];
     for &(prev_guess, pattern) in history {
-        for i in 0..5 {
-            if pattern.tiles[i] == Tile::Correct {
+        for (i, tile) in pattern.tiles.iter().enumerate() {
+            if *tile == Tile::Correct {
                 required[i] = Some(prev_guess.0[i]);
             }
         }
@@ -72,8 +72,8 @@ pub fn satisfies_hard_mode(guess: Word, history: &[(Word, Pattern)]) -> bool {
 
     for &(prev_guess, pattern) in history {
         let mut turn_letter_counts = [0u8; 26];
-        for i in 0..5 {
-            match pattern.tiles[i] {
+        for (i, tile) in pattern.tiles.iter().enumerate() {
+            match *tile {
                 Tile::Correct => {
                     let letter = prev_guess.0[i];
                     if let Some(existing) = required_green[i] {
@@ -95,8 +95,8 @@ pub fn satisfies_hard_mode(guess: Word, history: &[(Word, Pattern)]) -> bool {
         }
     }
 
-    for i in 0..5 {
-        if let Some(letter) = required_green[i] {
+    for (i, &required) in required_green.iter().enumerate() {
+        if let Some(letter) = required {
             if guess.0[i] != letter {
                 return false;
             }
@@ -119,7 +119,7 @@ pub fn satisfies_hard_mode(guess: Word, history: &[(Word, Pattern)]) -> bool {
 
 pub fn filter_hard_mode_compliant(pool: &[Word], history: &[(Word, Pattern)]) -> Vec<Word> {
     if history.is_empty() {
-        return pool.iter().copied().collect();
+        return pool.to_vec();
     }
     pool.iter()
         .copied()

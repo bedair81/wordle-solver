@@ -34,7 +34,7 @@ pub enum InputContext {
 
 impl InputContext {
     fn allows_typing(self) -> bool {
-        matches!(self, InputContext::TypingWord { .. })
+        matches!(self, InputContext::TypingWord)
     }
 
     fn allows_tile_keys(self) -> bool {
@@ -42,10 +42,7 @@ impl InputContext {
     }
 
     fn allows_play_shortcuts(self) -> bool {
-        matches!(
-            self,
-            InputContext::SettingFeedback | InputContext::ViewOnly
-        )
+        matches!(self, InputContext::SettingFeedback | InputContext::ViewOnly)
     }
 }
 
@@ -107,6 +104,26 @@ mod tests {
         assert!(matches!(
             map_key(key('h'), InputContext::SettingFeedback),
             None
+        ));
+    }
+
+    #[test]
+    fn undo_reset_only_in_feedback_not_while_typing() {
+        assert!(matches!(
+            map_key(key('u'), InputContext::TypingWord),
+            Some(Action::Char('u'))
+        ));
+        assert!(matches!(
+            map_key(key('u'), InputContext::SettingFeedback),
+            Some(Action::Undo)
+        ));
+        assert!(matches!(
+            map_key(key('r'), InputContext::TypingWord),
+            Some(Action::Char('r'))
+        ));
+        assert!(matches!(
+            map_key(key('r'), InputContext::SettingFeedback),
+            Some(Action::Reset)
         ));
     }
 

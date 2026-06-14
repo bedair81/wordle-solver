@@ -3,7 +3,7 @@ use crate::core::pattern::Pattern;
 use crate::core::word::Word;
 use crate::core::words::WordLists;
 
-use super::score::{frequency_score, GuessScore};
+use super::score::{compare_one_ply, frequency_score, GuessScore};
 
 const TOP_TWO_PLY: usize = 30;
 const FULL_TWO_PLY_REMAINING: usize = 30;
@@ -160,8 +160,6 @@ pub fn select_guess_candidates<'a>(
 }
 
 pub fn two_ply_candidate_indices(scores: &[GuessScore], remaining_len: usize) -> Vec<usize> {
-    use super::score::compare_one_ply;
-
     if remaining_len <= FULL_TWO_PLY_REMAINING {
         return (0..scores.len()).collect();
     }

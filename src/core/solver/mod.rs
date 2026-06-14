@@ -10,17 +10,20 @@ use crate::core::pattern::Pattern;
 use crate::core::word::Word;
 use crate::core::words::WordLists;
 
-pub use score::{compare_final, compare_one_ply, score_one_ply, GuessScore};
+pub use score::{compare_final, compare_one_ply, score_one_ply, score_two_ply, GuessScore};
 
 use candidates::{
     select_guess_candidates, shares_fixed_suffix, two_ply_candidate_indices, CandidateBuffer,
     TURNS_LEFT_REMAINING_SLACK,
 };
-use score::score_two_ply;
+use score::partition_sufficient;
 
 #[derive(Clone, Debug)]
 pub struct Suggestion {
     pub word: Word,
+    /// Information score in bits. Main path uses 2-ply entropy; early-return heuristics
+    /// (endgame, minimax) use 1-ply entropy from `score_one_ply`. Opening uses a
+    /// placeholder (`0.0`) because SLATE is fixed with no startup computation.
     pub entropy: f64,
     pub expected_remaining: f64,
 }
@@ -94,8 +97,7 @@ pub fn compute_suggestion(
                 turns_left,
                 false,
             ) {
-                let score =
-                    score_one_ply(word_lists, word, remaining_answers, &remaining_set);
+                let score = score_one_ply(word_lists, word, remaining_answers, &remaining_set);
                 return Some(Suggestion {
                     word,
                     entropy: score.one_ply_entropy,
@@ -109,15 +111,10 @@ pub fn compute_suggestion(
         // *o*er with greens locked). When remaining-only picks leave a bucket larger than
         // `turns_left - 1`, fall back to an off-list probe (e.g. boxer/foyer/joker/poker).
         if let Some(left) = turns_left {
-            if let Some(word) = endgame_pick(
-                word_lists,
-                remaining_answers,
-                &remaining_set,
-                history,
-                left,
-            ) {
-                let score =
-                    score_one_ply(word_lists, word, remaining_answers, &remaining_set);
+            if let Some(word) =
+                endgame_pick(word_lists, remaining_answers, &remaining_set, history, left)
+            {
+                let score = score_one_ply(word_lists, word, remaining_answers, &remaining_set);
                 return Some(Suggestion {
                     word,
                     entropy: score.one_ply_entropy,
@@ -136,10 +133,11 @@ pub fn compute_suggestion(
             if let Some(probe) =
                 best_offlist_partition_probe(word_lists, remaining_answers, &remaining_set, history)
             {
+                let score = score_one_ply(word_lists, probe, remaining_answers, &remaining_set);
                 return Some(Suggestion {
                     word: probe,
-                    entropy: 0.0,
-                    expected_remaining: remaining_answers.len() as f64,
+                    entropy: score.one_ply_entropy,
+                    expected_remaining: score.expected_remaining,
                 });
             }
         }
@@ -162,8 +160,7 @@ pub fn compute_suggestion(
                 turns_left,
                 false,
             ) {
-                let score =
-                    score_one_ply(word_lists, word, remaining_answers, &remaining_set);
+                let score = score_one_ply(word_lists, word, remaining_answers, &remaining_set);
                 return Some(Suggestion {
                     word,
                     entropy: score.one_ply_entropy,
@@ -205,7 +202,7 @@ pub fn compute_suggestion(
 
         let best = refined_scores
             .into_iter()
-            .max_by(|a, b| compare_final(*a, *b))?;
+            .max_by(|a, b| compare_final(*a, *b, turns_left))?;
 
         Some(Suggestion {
             word: best.word,
@@ -219,15 +216,8 @@ const ENDGAME_PROBE_MAX_REMAINING: usize = 16;
 
 const MINIMAX_MIDGAME_MAX_REMAINING: usize = 80;
 
-/// Largest bucket after a guess must be solvable in the turns still available after it.
-fn partition_sufficient(max_bucket: usize, turns_left: usize) -> bool {
-    max_bucket <= turns_left.saturating_sub(1).max(1)
-}
-
 fn max_bucket_size(word_lists: &WordLists, guess: Word, remaining: &[Word]) -> usize {
-    let buckets = word_lists
-        .pattern_cache
-        .build_buckets_for(guess, remaining);
+    let buckets = word_lists.pattern_cache.build_buckets_for(guess, remaining);
     buckets.counts.iter().copied().max().unwrap_or(0)
 }
 
@@ -339,7 +329,11 @@ fn best_partition_remaining_pick(
                 } else {
                     candidate.0 < prev.0
                 };
-                if better { candidate } else { prev }
+                if better {
+                    candidate
+                } else {
+                    prev
+                }
             }
         });
     }
@@ -420,9 +414,7 @@ fn best_minimax_compliant_pick(
 
     candidates.retain(|w| !offlist_only || !remaining_set.contains(w));
 
-    let prefer_answers = turns_left.is_some_and(|left| {
-        left <= 2 && remaining_answers.len() <= 6
-    });
+    let prefer_answers = turns_left.is_some_and(|left| left <= 2 && remaining_answers.len() <= 6);
 
     candidates
         .into_iter()
@@ -431,18 +423,21 @@ fn best_minimax_compliant_pick(
                 .pattern_cache
                 .build_buckets_for(guess, remaining_answers);
             let max_b = buckets.counts.iter().copied().max().unwrap_or(0);
-            if max_b == 0
-                || (remaining_answers.len() > 1 && max_b >= remaining_answers.len())
-            {
+            if max_b == 0 || (remaining_answers.len() > 1 && max_b >= remaining_answers.len()) {
                 return None;
             }
             let score = score_one_ply(word_lists, guess, remaining_answers, remaining_set);
             let is_answer = remaining_set.contains(&guess);
-            Some((guess, max_b, buckets.nonempty, score.one_ply_entropy, is_answer))
+            Some((
+                guess,
+                max_b,
+                buckets.nonempty,
+                score.one_ply_entropy,
+                is_answer,
+            ))
         })
         .min_by(|a, b| {
-            a.1
-                .cmp(&b.1)
+            a.1.cmp(&b.1)
                 .then_with(|| b.2.cmp(&a.2))
                 .then_with(|| {
                     if prefer_answers || suffix_cluster {
@@ -451,11 +446,7 @@ fn best_minimax_compliant_pick(
                         a.4.cmp(&b.4)
                     }
                 })
-                .then_with(|| {
-                    b.3
-                        .partial_cmp(&a.3)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
+                .then_with(|| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal))
                 .then_with(|| {
                     if prefer_answers {
                         b.0.cmp(&a.0)
@@ -487,10 +478,7 @@ fn score_best_probe(
         })
         .max_by(|a, b| {
             a.1.cmp(&b.1)
-                .then_with(|| {
-                    a.2.partial_cmp(&b.2)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
+                .then_with(|| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
                 .then_with(|| a.0.cmp(&b.0))
         })
         .map(|(guess, _, _)| guess)
@@ -536,6 +524,8 @@ pub fn auto_solve(word_lists: &WordLists, target: Word) -> Option<Vec<(Word, Pat
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
     use crate::core::hard_mode::satisfies_hard_mode;
     use crate::core::pattern::Pattern;
@@ -650,10 +640,79 @@ mod tests {
         assert!(!shares_fixed_suffix(&mixed));
     }
 
+    fn ing_suffix_cluster() -> Vec<Word> {
+        [
+            "aging", "aping", "being", "bring", "cling", "doing", "dying", "eking", "eying",
+            "fling", "going", "icing", "lying", "owing", "sling", "sting", "suing", "swing",
+            "thing", "tying", "using", "vying", "wring",
+        ]
+        .iter()
+        .map(|s| w(s))
+        .collect()
+    }
+
     #[test]
-    fn partition_sufficient_requires_small_largest_bucket() {
-        assert!(partition_sufficient(2, 3));
-        assert!(!partition_sufficient(4, 3));
+    fn suffix_offlist_probe_path_reports_score_one_ply_metrics() {
+        let lists = WordLists::load();
+        let remaining: Vec<Word> = ing_suffix_cluster().into_iter().take(18).collect();
+        assert!(
+            remaining.len() > ENDGAME_PROBE_MAX_REMAINING,
+            "must skip endgame_pick to hit suffix off-list block"
+        );
+        assert!(
+            remaining.len() <= MINIMAX_MIDGAME_MAX_REMAINING,
+            "fixture should stay within mid-game upper bound if minimax ever runs"
+        );
+        let remaining_set: HashSet<Word> = remaining.iter().copied().collect();
+        let expected_probe =
+            best_offlist_partition_probe(&lists, &remaining, &remaining_set, &[]).unwrap();
+
+        let suggestion = compute_suggestion(&lists, &remaining, &[], Some(1)).unwrap();
+        let expected = score_one_ply(&lists, suggestion.word, &remaining, &remaining_set);
+
+        assert_eq!(
+            suggestion.word, expected_probe,
+            "compute_suggestion should use best_offlist_partition_probe"
+        );
+        assert!(
+            !remaining.contains(&suggestion.word),
+            "suffix off-list block should pick a probe, got {}",
+            suggestion.word
+        );
+        assert!(
+            (suggestion.entropy - expected.one_ply_entropy).abs() < 1e-9,
+            "entropy should match score_one_ply"
+        );
+        assert!(
+            (suggestion.expected_remaining - expected.expected_remaining).abs() < 1e-9,
+            "expected_remaining should match score_one_ply"
+        );
+    }
+
+    #[test]
+    fn compute_suggestion_with_turns_left_differs_from_open_ended() {
+        let lists = WordLists::load();
+        let remaining = vec![
+            w("bound"),
+            w("found"),
+            w("hound"),
+            w("mound"),
+            w("pound"),
+            w("round"),
+            w("sound"),
+            w("wound"),
+        ];
+        let with_turns = compute_suggestion(&lists, &remaining, &[], Some(3)).unwrap();
+        let open_ended = compute_suggestion(&lists, &remaining, &[], None).unwrap();
+
+        assert_eq!(
+            with_turns.word,
+            w("barfs"),
+            "endgame minimax pick at 3 turns"
+        );
+        assert_eq!(open_ended.word, w("herms"), "2-ply path without turns_left");
+        assert_ne!(with_turns.word, open_ended.word);
+        assert!(!remaining.contains(&with_turns.word));
     }
 
     #[test]

@@ -1,5 +1,9 @@
+use std::collections::HashSet;
+
 use wordle_solver::core::hard_mode::satisfies_hard_mode;
-use wordle_solver::core::solver::auto_solve;
+use wordle_solver::core::solver::{
+    auto_solve, compare_final, compute_suggestion, score_one_ply, score_two_ply,
+};
 use wordle_solver::core::word::Word;
 use wordle_solver::core::words::WordLists;
 
@@ -111,22 +115,131 @@ fn quality_benchmark_stats() {
     assert!(hardest[0].1 <= 6);
 }
 
+const FAST_HARD_CASES: &[&str] = &[
+    "boxer", "batty", "billy", "breed", "bunch", "cater", "cheer", "creak", "pound", "wound",
+    "haunt", "waste", "bound", "found", "hound", "round", "sound",
+];
+
+/// Fast smoke: known hard cases only (~5–6s release, ~1–2 min debug). Always runs in CI.
 #[test]
-fn prefers_remaining_answer_on_entropy_tie() {
-    use std::collections::HashSet;
-    use wordle_solver::core::solver::{compare_one_ply, score_one_ply};
-
+fn auto_solves_hard_cases_smoke() {
     let lists = WordLists::load();
-    let crane = Word::from_str("crate").unwrap();
-    let grate = Word::from_str("grate").unwrap();
-    let slate = Word::from_str("slate").unwrap();
-    let remaining = [crane, grate];
-    let set: HashSet<Word> = remaining.iter().copied().collect();
-
-    let from_answers = score_one_ply(&lists, crane, &remaining, &set);
-    let probe = score_one_ply(&lists, slate, &remaining, &set);
-
-    if (from_answers.one_ply_entropy - probe.one_ply_entropy).abs() < 1e-9 {
-        assert!(compare_one_ply(from_answers, probe) == std::cmp::Ordering::Greater);
+    for &target in FAST_HARD_CASES {
+        let word = Word::from_str(target).unwrap();
+        let history = auto_solve(&lists, word).unwrap_or_else(|| panic!("failed {target}"));
+        assert_valid_auto_solve(&history, target);
     }
+}
+
+/// Strided quality sample (~50 words). Ignored by default: ~7s release, ~4 min debug.
+/// Run before releases: `cargo test --release auto_solves_strided_sample -- --ignored`
+#[test]
+#[ignore = "strided quality sample; run in release before releases"]
+fn auto_solves_strided_sample() {
+    let lists = WordLists::load();
+    let strided: Vec<Word> = lists.answers.iter().step_by(46).copied().collect();
+    assert!(
+        strided.len() >= 50,
+        "expected at least 50 strided targets, got {}",
+        strided.len()
+    );
+
+    let mut failures = Vec::new();
+    let mut total = 0usize;
+    let mut worst = 0usize;
+
+    for &word in &strided {
+        match auto_solve(&lists, word) {
+            Some(history) => {
+                assert_valid_auto_solve(&history, word.as_str());
+                let n = history.len();
+                total += n;
+                worst = worst.max(n);
+            }
+            None => failures.push(word),
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "failed strided words: {:?}",
+        failures.iter().take(5).collect::<Vec<_>>()
+    );
+    let avg = total as f64 / strided.len() as f64;
+    assert!(worst <= 6, "worst case {worst} in strided sample");
+    assert!(
+        avg <= 3.61,
+        "strided sample average {avg:.3} too high (full benchmark <= 3.56; sample ~3.61)"
+    );
+}
+
+#[test]
+fn compare_final_picks_better_partition_in_ound_cluster() {
+    let lists = WordLists::load();
+    let remaining = [
+        Word::from_str("bound").unwrap(),
+        Word::from_str("found").unwrap(),
+        Word::from_str("hound").unwrap(),
+        Word::from_str("mound").unwrap(),
+        Word::from_str("pound").unwrap(),
+        Word::from_str("round").unwrap(),
+        Word::from_str("sound").unwrap(),
+        Word::from_str("wound").unwrap(),
+    ];
+    let remaining_set: HashSet<Word> = remaining.iter().copied().collect();
+    let slate_word = Word::from_str("slate").unwrap();
+    let taint_word = Word::from_str("taint").unwrap();
+    let slate_score = score_one_ply(&lists, slate_word, &remaining, &remaining_set);
+    let taint_score = score_one_ply(&lists, taint_word, &remaining, &remaining_set);
+    let slate = score_two_ply(
+        &lists,
+        slate_score,
+        &remaining,
+        &remaining_set,
+        &[],
+        Some(3),
+    );
+    let taint = score_two_ply(
+        &lists,
+        taint_score,
+        &remaining,
+        &remaining_set,
+        &[],
+        Some(3),
+    );
+    assert_eq!(
+        compare_final(slate, taint, Some(3)),
+        std::cmp::Ordering::Greater
+    );
+
+    let guesses = ["bound", "sound", "taint", "slate"];
+    let refined: Vec<_> = guesses
+        .iter()
+        .map(|s| Word::from_str(s).unwrap())
+        .map(|word| score_one_ply(&lists, word, &remaining, &remaining_set))
+        .map(|score| score_two_ply(&lists, score, &remaining, &remaining_set, &[], Some(3)))
+        .collect();
+    let best = refined
+        .iter()
+        .max_by(|a, b| compare_final(**a, **b, Some(3)))
+        .expect("guesses scored");
+    assert_eq!(best.word, Word::from_str("slate").unwrap());
+    assert_eq!(best.worst_bucket, 7);
+}
+
+#[test]
+fn compute_suggestion_respects_turns_left_in_endgame() {
+    let lists = WordLists::load();
+    let remaining: Vec<Word> = [
+        "bound", "found", "hound", "mound", "pound", "round", "sound", "wound",
+    ]
+    .iter()
+    .map(|s| Word::from_str(s).unwrap())
+    .collect();
+    let with_turns = compute_suggestion(&lists, &remaining, &[], Some(3)).unwrap();
+    let open_ended = compute_suggestion(&lists, &remaining, &[], None).unwrap();
+
+    assert_eq!(with_turns.word, Word::from_str("barfs").unwrap());
+    assert_eq!(open_ended.word, Word::from_str("herms").unwrap());
+    assert!(!remaining.contains(&with_turns.word));
 }

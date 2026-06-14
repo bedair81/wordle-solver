@@ -6,22 +6,22 @@ pub fn compute_feedback(guess: Word, answer: Word) -> Pattern {
     let mut tiles = [Tile::Absent; 5];
     let mut answer_counts = [0u8; 26];
 
-    for i in 0..5 {
+    for (i, tile) in tiles.iter_mut().enumerate() {
         if guess.0[i] == answer.0[i] {
-            tiles[i] = Tile::Correct;
+            *tile = Tile::Correct;
         } else {
             let idx = (answer.0[i] - b'a') as usize;
             answer_counts[idx] += 1;
         }
     }
 
-    for i in 0..5 {
-        if tiles[i] == Tile::Correct {
+    for (i, tile) in tiles.iter_mut().enumerate() {
+        if *tile == Tile::Correct {
             continue;
         }
         let idx = (guess.0[i] - b'a') as usize;
         if answer_counts[idx] > 0 {
-            tiles[i] = Tile::Present;
+            *tile = Tile::Present;
             answer_counts[idx] -= 1;
         }
     }

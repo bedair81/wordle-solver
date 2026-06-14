@@ -21,6 +21,12 @@ Run tests:
 cargo test
 ```
 
+Fast CI runs hard-case smoke tests only (~5–6s release, ~1–2 min debug). For strided quality sampling:
+
+```bash
+cargo test --release auto_solves_strided_sample -- --ignored
+```
+
 Full benchmark (all ~2,309 answers, ~15–25 minutes in release):
 
 ```bash
@@ -56,13 +62,13 @@ Copilot only suggests words from our bundled guess list (NYT-legal guesses). Sol
 | `g` / `y` / `x` | Set tile green / yellow / gray (feedback phase) |
 | `Space` | Cycle tile color (feedback phase) |
 | `←` / `→` | Move feedback cursor (feedback phase) |
-| `u` | Undo last turn (after first turn, or in feedback / game-over) |
-| `r` | Reset game (after first turn, or in feedback / game-over) |
+| `u` | Undo last turn (feedback phase or game-over only) |
+| `r` | Reset game (feedback phase or game-over only) |
 | `?` | Toggle help |
 | `Esc` | Back to menu |
 | `q` | Quit |
 
-While typing a guess, all letters (including `u` and `r`) go into the word. `u` undo and `r` reset are only active in the feedback phase or after the game ends.
+While typing a guess, all letters (including `u` and `r`) go into the word — undo during typing is intentionally disabled so those keys can be used in words like `crumb` or `urged`. `u` undo and `r` reset are only active in the feedback phase or after the game ends.
 
 ## Guess Rules (NYT Hard Mode)
 

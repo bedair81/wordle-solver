@@ -13,6 +13,7 @@ impl Word {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         let s = s.trim().to_ascii_lowercase();
         if s.len() != 5 || !s.is_ascii() {

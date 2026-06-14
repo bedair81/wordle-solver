@@ -20,7 +20,7 @@ fn main() {
             Some(history) => {
                 let n = history.len();
                 total_guesses += n;
-                if n >= 1 && n <= 6 {
+                if (1..=6).contains(&n) {
                     distribution[n - 1] += 1;
                 }
                 by_guesses.entry(n).or_default().push(target);

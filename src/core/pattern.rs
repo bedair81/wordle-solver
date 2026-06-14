@@ -58,6 +58,7 @@ impl Pattern {
         self.key
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         let s = s.trim();
         if s.len() != 5 {
