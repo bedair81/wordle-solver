@@ -133,7 +133,7 @@ mod tests {
     use crate::core::pattern::Pattern;
 
     fn w(s: &str) -> Word {
-        Word::from_str(s).unwrap()
+        Word::parse(s).unwrap()
     }
 
     fn pat(s: &str) -> Pattern {

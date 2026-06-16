@@ -79,7 +79,7 @@ fn parse_words(raw: &str) -> Vec<Word> {
             if line.is_empty() {
                 return None;
             }
-            Word::from_str(line)
+            Word::parse(line)
         })
         .collect()
 }
@@ -105,8 +105,8 @@ mod tests {
         use crate::core::solver::score::pattern_bucket_index;
 
         let lists = WordLists::load();
-        let guess = Word::from_str("slate").unwrap();
-        let answer = Word::from_str("crate").unwrap();
+        let guess = Word::parse("slate").unwrap();
+        let answer = Word::parse("crate").unwrap();
         let expected = pattern_bucket_index(compute_feedback(guess, answer));
         assert_eq!(lists.pattern_cache.bucket(guess, answer), Some(expected));
     }

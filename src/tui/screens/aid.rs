@@ -653,11 +653,11 @@ mod tests {
         state
             .game
             .record_turn(
-                Word::from_str("slate").unwrap(),
+                Word::parse("slate").unwrap(),
                 Pattern::from_str("Gxxxx").unwrap(),
             )
             .unwrap();
-        let bad = Word::from_str("plate").unwrap();
+        let bad = Word::parse("plate").unwrap();
         assert!(!state.begin_feedback_phase(bad));
         assert!(state.error.is_some());
     }

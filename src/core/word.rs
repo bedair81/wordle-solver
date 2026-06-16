@@ -1,6 +1,17 @@
 use std::fmt;
 use std::str::FromStr;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidWord;
+
+impl fmt::Display for InvalidWord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid 5-letter lowercase word")
+    }
+}
+
+impl std::error::Error for InvalidWord {}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Word(pub [u8; 5]);
 
@@ -13,9 +24,9 @@ impl Word {
         }
     }
 
-    #[allow(clippy::should_implement_trait)]
-    pub fn from_str(s: &str) -> Option<Self> {
-        let s = s.trim().to_ascii_lowercase();
+    /// Parse a trimmed lowercase ASCII 5-letter word.
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
         if s.len() != 5 || !s.is_ascii() {
             return None;
         }
@@ -25,7 +36,11 @@ impl Word {
     }
 
     pub fn as_str(&self) -> &str {
-        // SAFETY: all bytes are valid ASCII lowercase letters
+        debug_assert!(
+            self.0.iter().all(|&b| b.is_ascii_lowercase()),
+            "Word invariant violated"
+        );
+        // SAFETY: all bytes are valid ASCII lowercase letters (enforced by `new` / `parse`).
         unsafe { std::str::from_utf8_unchecked(&self.0) }
     }
 
@@ -60,10 +75,10 @@ impl fmt::Debug for Word {
 }
 
 impl FromStr for Word {
-    type Err = ();
+    type Err = InvalidWord;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::from_str(s).ok_or(())
+        Self::parse(s).ok_or(InvalidWord)
     }
 }
 
@@ -73,13 +88,15 @@ mod tests {
 
     #[test]
     fn parses_valid_word() {
-        let w = Word::from_str("slate").unwrap();
+        let w = Word::parse("slate").unwrap();
         assert_eq!(w.as_str(), "slate");
+        assert_eq!(Word::from_str("slate").unwrap(), w);
     }
 
     #[test]
     fn rejects_invalid_word() {
-        assert!(Word::from_str("slat").is_none());
-        assert!(Word::from_str("slate!").is_none());
+        assert!(Word::parse("slat").is_none());
+        assert!(Word::parse("slate!").is_none());
+        assert!(Word::from_str("slat").is_err());
     }
 }
