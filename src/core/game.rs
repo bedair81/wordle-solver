@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::core::filter::filter_by_history;
+use crate::core::filter::{filter_by_history, filter_candidates};
 use crate::core::hard_mode::satisfies_hard_mode;
 use crate::core::pattern::Pattern;
 use crate::core::solver::Suggestion;
@@ -16,6 +16,7 @@ pub struct Turn {
 #[derive(Clone)]
 pub struct GameState {
     pub turns: Vec<Turn>,
+    history: Vec<(Word, Pattern)>,
     pub word_lists: Arc<WordLists>,
     remaining_answers: Vec<Word>,
 }
@@ -25,6 +26,7 @@ impl GameState {
         let remaining_answers = word_lists.answers.clone();
         Self {
             turns: Vec::new(),
+            history: Vec::new(),
             word_lists,
             remaining_answers,
         }
@@ -38,19 +40,20 @@ impl GameState {
         self.remaining_answers.len()
     }
 
+    pub fn history(&self) -> &[(Word, Pattern)] {
+        &self.history
+    }
+
     pub fn suggest_next(&self) -> Option<Suggestion> {
         if self.is_solved() || self.is_lost() {
             return None;
         }
 
-        let history: Vec<(Word, Pattern)> =
-            self.turns.iter().map(|t| (t.guess, t.pattern)).collect();
-
         let turns_left = 6usize.saturating_sub(self.turns.len());
         let suggestion = crate::core::solver::suggest_guess_with_turns(
             &self.word_lists,
             &self.remaining_answers,
-            &history,
+            &self.history,
             Some(turns_left),
         )?;
         if !self.word_lists.is_valid_guess(suggestion.word) {
@@ -83,19 +86,20 @@ impl GameState {
             return Err(GameError::InvalidGuess(guess));
         }
 
-        let history: Vec<(Word, Pattern)> =
-            self.turns.iter().map(|t| (t.guess, t.pattern)).collect();
-        if !satisfies_hard_mode(guess, &history) {
+        if !satisfies_hard_mode(guess, &self.history) {
             return Err(GameError::HardModeViolation);
         }
 
         self.turns.push(Turn { guess, pattern });
-        self.recompute_remaining();
+        self.history.push((guess, pattern));
+        self.remaining_answers =
+            filter_candidates(&self.remaining_answers, guess, pattern);
         Ok(())
     }
 
     pub fn undo_turn(&mut self) -> bool {
         if self.turns.pop().is_some() {
+            self.history.pop();
             self.recompute_remaining();
             true
         } else {
@@ -105,6 +109,7 @@ impl GameState {
 
     pub fn reset(&mut self) {
         self.turns.clear();
+        self.history.clear();
         self.remaining_answers = self.word_lists.answers.clone();
     }
 
@@ -120,9 +125,8 @@ impl GameState {
     }
 
     fn recompute_remaining(&mut self) {
-        let history: Vec<(Word, Pattern)> =
-            self.turns.iter().map(|t| (t.guess, t.pattern)).collect();
-        self.remaining_answers = filter_by_history(&self.word_lists.answers, &history);
+        self.remaining_answers =
+            filter_by_history(&self.word_lists.answers, &self.history);
     }
 }
 
@@ -156,7 +160,7 @@ mod tests {
     use std::sync::Arc;
 
     fn w(s: &str) -> Word {
-        Word::from_str(s).unwrap()
+        Word::parse(s).unwrap()
     }
 
     fn pat(s: &str) -> Pattern {
@@ -230,5 +234,17 @@ mod tests {
             game.record_turn(w("crane"), pat("xxxxx")),
             Err(GameError::GameOver)
         );
+    }
+
+    #[test]
+    fn incremental_filter_matches_full_recompute() {
+        let mut game = game();
+        game.record_turn(w("slate"), pat("xxGGG")).unwrap();
+        game.record_turn(w("crate"), pat("GGGGG")).unwrap();
+        let incremental = game.remaining_answers().to_vec();
+        game.reset();
+        game.record_turn(w("slate"), pat("xxGGG")).unwrap();
+        game.record_turn(w("crate"), pat("GGGGG")).unwrap();
+        assert_eq!(incremental, game.remaining_answers());
     }
 }

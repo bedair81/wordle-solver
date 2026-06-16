@@ -33,7 +33,7 @@ fn auto_solves_sample_words() {
     for target in [
         "crane", "slate", "eerie", "brood", "hello", "bound", "wound",
     ] {
-        let word = Word::from_str(target).unwrap();
+        let word = Word::parse(target).unwrap();
         let history = auto_solve(&lists, word).expect("failed to solve {target}");
         assert_valid_auto_solve(&history, target);
     }
@@ -125,7 +125,7 @@ const FAST_HARD_CASES: &[&str] = &[
 fn auto_solves_hard_cases_smoke() {
     let lists = WordLists::load();
     for &target in FAST_HARD_CASES {
-        let word = Word::from_str(target).unwrap();
+        let word = Word::parse(target).unwrap();
         let history = auto_solve(&lists, word).unwrap_or_else(|| panic!("failed {target}"));
         assert_valid_auto_solve(&history, target);
     }
@@ -177,18 +177,18 @@ fn auto_solves_strided_sample() {
 fn compare_final_picks_better_partition_in_ound_cluster() {
     let lists = WordLists::load();
     let remaining = [
-        Word::from_str("bound").unwrap(),
-        Word::from_str("found").unwrap(),
-        Word::from_str("hound").unwrap(),
-        Word::from_str("mound").unwrap(),
-        Word::from_str("pound").unwrap(),
-        Word::from_str("round").unwrap(),
-        Word::from_str("sound").unwrap(),
-        Word::from_str("wound").unwrap(),
+        Word::parse("bound").unwrap(),
+        Word::parse("found").unwrap(),
+        Word::parse("hound").unwrap(),
+        Word::parse("mound").unwrap(),
+        Word::parse("pound").unwrap(),
+        Word::parse("round").unwrap(),
+        Word::parse("sound").unwrap(),
+        Word::parse("wound").unwrap(),
     ];
     let remaining_set: HashSet<Word> = remaining.iter().copied().collect();
-    let slate_word = Word::from_str("slate").unwrap();
-    let taint_word = Word::from_str("taint").unwrap();
+    let slate_word = Word::parse("slate").unwrap();
+    let taint_word = Word::parse("taint").unwrap();
     let slate_score = score_one_ply(&lists, slate_word, &remaining, &remaining_set);
     let taint_score = score_one_ply(&lists, taint_word, &remaining, &remaining_set);
     let slate = score_two_ply(
@@ -215,7 +215,7 @@ fn compare_final_picks_better_partition_in_ound_cluster() {
     let guesses = ["bound", "sound", "taint", "slate"];
     let refined: Vec<_> = guesses
         .iter()
-        .map(|s| Word::from_str(s).unwrap())
+        .map(|s| Word::parse(s).unwrap())
         .map(|word| score_one_ply(&lists, word, &remaining, &remaining_set))
         .map(|score| score_two_ply(&lists, score, &remaining, &remaining_set, &[], Some(3)))
         .collect();
@@ -223,7 +223,7 @@ fn compare_final_picks_better_partition_in_ound_cluster() {
         .iter()
         .max_by(|a, b| compare_final(**a, **b, Some(3)))
         .expect("guesses scored");
-    assert_eq!(best.word, Word::from_str("slate").unwrap());
+    assert_eq!(best.word, Word::parse("slate").unwrap());
     assert_eq!(best.worst_bucket, 7);
 }
 
@@ -234,12 +234,12 @@ fn compute_suggestion_respects_turns_left_in_endgame() {
         "bound", "found", "hound", "mound", "pound", "round", "sound", "wound",
     ]
     .iter()
-    .map(|s| Word::from_str(s).unwrap())
+    .map(|s| Word::parse(s).unwrap())
     .collect();
     let with_turns = compute_suggestion(&lists, &remaining, &[], Some(3)).unwrap();
     let open_ended = compute_suggestion(&lists, &remaining, &[], None).unwrap();
 
-    assert_eq!(with_turns.word, Word::from_str("barfs").unwrap());
-    assert_eq!(open_ended.word, Word::from_str("herms").unwrap());
+    assert_eq!(with_turns.word, Word::parse("barfs").unwrap());
+    assert_eq!(open_ended.word, Word::parse("herms").unwrap());
     assert!(!remaining.contains(&with_turns.word));
 }

@@ -1,8 +1,11 @@
+use std::cell::RefCell;
 use std::collections::HashSet;
 
 use crate::core::pattern::Pattern;
 use crate::core::word::Word;
 use crate::core::words::WordLists;
+
+use super::candidates::{followup_guess_pool, CandidateBuffer};
 
 /// Base-3 index in `0..243` for fixed-size pattern buckets.
 pub fn pattern_bucket_index(pattern: Pattern) -> usize {
@@ -54,7 +57,7 @@ pub struct GuessScore {
     pub frequency: usize,
 }
 
-/// When ≤ this many turns remain, `compare_final` prefers minimax bucket sizing
+/// When ≤ this many turns remain, follow-up and final comparison prefer minimax bucket sizing
 /// over entropy (endgame positions where a single oversized bucket loses the game).
 const TIGHT_TURNS_PARTITION_CUTOFF: usize = 4;
 
@@ -165,16 +168,52 @@ pub fn score_one_ply(
     }
 }
 
-/// Best follow-up entropy for 2-ply scoring. Uses full `compare_one_ply` ordering to
-/// pick the follow-up guess, but returns only the entropy scalar. Tie-breakers
-/// (worst bucket, answer preference, etc.) affect the result only when follow-up
-/// entropies are equal. Follow-up comparison stays 1-ply-centric (not `compare_final`
-/// with turns-left) to avoid 3-ply cost inside 2-ply evaluation.
+struct TwoPlyScratch {
+    followup_buffer: CandidateBuffer,
+    partitions: [Vec<Word>; PATTERN_BUCKETS],
+}
+
+impl TwoPlyScratch {
+    fn new() -> Self {
+        Self {
+            followup_buffer: CandidateBuffer::new(),
+            partitions: std::array::from_fn(|_| Vec::new()),
+        }
+    }
+
+    fn clear_partitions(&mut self) {
+        for bucket in &mut self.partitions {
+            bucket.clear();
+        }
+    }
+}
+
+thread_local! {
+    static TWO_PLY_SCRATCH: RefCell<TwoPlyScratch> = RefCell::new(TwoPlyScratch::new());
+}
+
+fn compare_followup(a: GuessScore, b: GuessScore, turns_left: Option<usize>) -> std::cmp::Ordering {
+    if let Some(left) = turns_left {
+        if left <= TIGHT_TURNS_PARTITION_CUTOFF && a.worst_bucket != b.worst_bucket {
+            let a_ok = partition_sufficient(a.worst_bucket, left);
+            let b_ok = partition_sufficient(b.worst_bucket, left);
+            match (a_ok, b_ok) {
+                (true, false) => return std::cmp::Ordering::Greater,
+                (false, true) => return std::cmp::Ordering::Less,
+                _ => return b.worst_bucket.cmp(&a.worst_bucket),
+            }
+        }
+    }
+    compare_one_ply(a, b)
+}
+
+/// Best follow-up entropy for 2-ply scoring. Uses turn-aware minimax when guesses are tight.
 fn best_followup_one_ply(
     word_lists: &WordLists,
     remaining: &[Word],
     guess_pool: &[Word],
     remaining_set: &HashSet<Word>,
+    turns_left: Option<usize>,
 ) -> f64 {
     if remaining.len() <= 1 {
         return 0.0;
@@ -189,7 +228,7 @@ fn best_followup_one_ply(
     guess_pool
         .iter()
         .map(|&guess| score_one_ply(word_lists, guess, remaining, remaining_set))
-        .max_by(|a, b| compare_one_ply(*a, *b))
+        .max_by(|a, b| compare_followup(*a, *b, turns_left))
         .map(|s| s.one_ply_entropy)
         .unwrap_or(0.0)
 }
@@ -199,54 +238,68 @@ pub fn score_two_ply(
     mut score: GuessScore,
     remaining: &[Word],
     _remaining_set: &HashSet<Word>,
-    history: &[(Word, crate::core::pattern::Pattern)],
+    history: &[(Word, Pattern)],
     turns_left: Option<usize>,
 ) -> GuessScore {
     use crate::core::feedback::compute_feedback;
-    use crate::core::solver::candidates::{followup_guess_pool, CandidateBuffer};
 
     if remaining.len() <= 1 {
         score.two_ply_entropy = 0.0;
         return score;
     }
 
-    let total = remaining.len() as f64;
-    let mut partitions: [Vec<Word>; PATTERN_BUCKETS] = std::array::from_fn(|_| Vec::new());
+    TWO_PLY_SCRATCH.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        scratch.clear_partitions();
 
-    for &answer in remaining {
-        let idx = word_lists
-            .pattern_cache
-            .bucket_or_compute(score.word, answer);
-        partitions[idx].push(answer);
-    }
+        for &answer in remaining {
+            let idx = word_lists
+                .pattern_cache
+                .bucket_or_compute(score.word, answer);
+            scratch.partitions[idx].push(answer);
+        }
 
-    let mut followup_scratch = CandidateBuffer::new();
-    let mut two_ply = 0.0;
+        let total = remaining.len() as f64;
+        let mut two_ply = 0.0;
+        let followup_turns = turns_left.map(|left| left.saturating_sub(1));
 
-    for subset in partitions.into_iter().filter(|s| !s.is_empty()) {
-        let weight = subset.len() as f64 / total;
-        let followup = if subset.len() <= 1 {
-            0.0
-        } else {
-            let subset_set: HashSet<Word> = subset.iter().copied().collect();
-            let pattern = compute_feedback(score.word, subset[0]);
-            let mut extended = history.to_vec();
-            extended.push((score.word, pattern));
-            let followup_turns = turns_left.map(|left| left.saturating_sub(1));
-            let pool = followup_guess_pool(
-                word_lists,
-                &subset,
-                &extended,
-                followup_turns,
-                &mut followup_scratch,
-            );
-            best_followup_one_ply(word_lists, &subset, pool, &subset_set)
-        };
-        two_ply += weight * followup;
-    }
+        let weighted_subsets: Vec<(Vec<Word>, f64)> = scratch
+            .partitions
+            .iter()
+            .filter(|s| !s.is_empty())
+            .map(|subset| (subset.clone(), subset.len() as f64 / total))
+            .collect();
 
-    score.two_ply_entropy = two_ply;
-    score
+        for (subset, weight) in weighted_subsets {
+            let followup = if subset.len() <= 1 {
+                0.0
+            } else {
+                let subset_set: HashSet<Word> = subset.iter().copied().collect();
+                let pattern = compute_feedback(score.word, subset[0]);
+                let mut extended = Vec::with_capacity(history.len() + 1);
+                extended.extend_from_slice(history);
+                extended.push((score.word, pattern));
+                let pool = followup_guess_pool(
+                    word_lists,
+                    &subset,
+                    &extended,
+                    followup_turns,
+                    &mut scratch.followup_buffer,
+                );
+                best_followup_one_ply(
+                    word_lists,
+                    &subset,
+                    pool,
+                    &subset_set,
+                    followup_turns,
+                )
+            };
+            two_ply += weight * followup;
+        }
+
+        score.two_ply_entropy = two_ply;
+        score
+    })
 }
 
 #[cfg(test)]
@@ -255,7 +308,7 @@ mod tests {
     use crate::core::words::WordLists;
 
     fn w(s: &str) -> Word {
-        Word::from_str(s).unwrap()
+        Word::parse(s).unwrap()
     }
 
     fn set(words: &[&str]) -> HashSet<Word> {

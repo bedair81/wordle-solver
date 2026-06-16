@@ -114,8 +114,8 @@ mod tests {
         use crate::core::feedback::compute_feedback;
 
         let lists = WordLists::load();
-        let guess = Word::from_str("slate").unwrap();
-        let answer = Word::from_str("crate").unwrap();
+        let guess = Word::parse("slate").unwrap();
+        let answer = Word::parse("crate").unwrap();
         let expected = pattern_bucket_index(compute_feedback(guess, answer));
         assert_eq!(lists.pattern_cache.bucket(guess, answer), Some(expected));
     }
@@ -123,10 +123,10 @@ mod tests {
     #[test]
     fn build_buckets_for_unknown_guess_matches_live() {
         let lists = WordLists::load();
-        let guess = Word::from_str("qqqqq").unwrap();
+        let guess = Word::parse("qqqqq").unwrap();
         let remaining = [
-            Word::from_str("agree").unwrap(),
-            Word::from_str("abbey").unwrap(),
+            Word::parse("agree").unwrap(),
+            Word::parse("abbey").unwrap(),
         ];
         let live = lists.pattern_cache.build_buckets_for(guess, &remaining);
         assert!(live.nonempty >= 1);

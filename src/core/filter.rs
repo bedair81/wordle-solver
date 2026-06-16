@@ -25,7 +25,7 @@ mod tests {
     use crate::core::words::WordLists;
 
     fn w(s: &str) -> Word {
-        Word::from_str(s).unwrap()
+        Word::parse(s).unwrap()
     }
 
     fn pat(s: &str) -> Pattern {

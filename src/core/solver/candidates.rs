@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::core::hard_mode::{filter_hard_mode_compliant, satisfies_hard_mode};
 use crate::core::pattern::Pattern;
 use crate::core::word::Word;
@@ -6,6 +8,7 @@ use crate::core::words::WordLists;
 use super::score::{compare_one_ply, frequency_score, GuessScore};
 
 const TOP_TWO_PLY: usize = 30;
+const TOP_TWO_PLY_TIGHT: usize = 50;
 const FULL_TWO_PLY_REMAINING: usize = 30;
 const EARLY_GAME_REMAINING: usize = 500;
 const EARLY_GAME_CANDIDATES: usize = 800;
@@ -18,6 +21,7 @@ pub struct CandidateBuffer {
     pub compliant_pool: Vec<Word>,
     pub small_remaining: Vec<Word>,
     pub early_game_pool: Vec<Word>,
+    seen: HashSet<Word>,
 }
 
 impl CandidateBuffer {
@@ -26,21 +30,16 @@ impl CandidateBuffer {
             compliant_pool: Vec::new(),
             small_remaining: Vec::new(),
             early_game_pool: Vec::new(),
+            seen: HashSet::new(),
         }
     }
 }
 
-fn filter_remaining_compliant(remaining: &[Word], history: &[(Word, Pattern)]) -> Vec<Word> {
-    let tried: std::collections::HashSet<Word> = history.iter().map(|(g, _)| *g).collect();
-    remaining
-        .iter()
-        .copied()
-        .filter(|&word| satisfies_hard_mode(word, history) && !tried.contains(&word))
-        .collect()
+fn tried_guesses(history: &[(Word, Pattern)]) -> HashSet<Word> {
+    history.iter().map(|(g, _)| *g).collect()
 }
 
-fn exclude_prior_guesses(words: &mut Vec<Word>, history: &[(Word, Pattern)]) {
-    let tried: std::collections::HashSet<Word> = history.iter().map(|(g, _)| *g).collect();
+fn exclude_prior_guesses(words: &mut Vec<Word>, tried: &HashSet<Word>) {
     words.retain(|w| !tried.contains(w));
 }
 
@@ -57,9 +56,15 @@ fn should_use_remaining_only(remaining_len: usize, turns_left: usize) -> bool {
     remaining_len <= turns_left.saturating_add(TURNS_LEFT_REMAINING_SLACK)
 }
 
-fn union_remaining_into(pool: &mut Vec<Word>, remaining: &[Word]) {
-    for &word in remaining {
-        if !pool.contains(&word) {
+fn union_unique(pool: &mut Vec<Word>, extra: &[Word], seen: &mut HashSet<Word>) {
+    if extra.is_empty() {
+        return;
+    }
+    seen.clear();
+    seen.extend(pool.iter().copied());
+    pool.reserve(extra.len());
+    for &word in extra {
+        if seen.insert(word) {
             pool.push(word);
         }
     }
@@ -80,62 +85,70 @@ fn fill_compliant_pool(
     }
 }
 
-pub fn select_guess_candidates<'a>(
+fn compliant_remaining_subset(
+    remaining: &[Word],
+    history: &[(Word, Pattern)],
+    tried: &HashSet<Word>,
+    out: &mut Vec<Word>,
+) {
+    out.clear();
+    out.extend(
+        remaining
+            .iter()
+            .copied()
+            .filter(|&word| satisfies_hard_mode(word, history) && !tried.contains(&word)),
+    );
+    if out.is_empty() {
+        out.extend(
+            remaining
+                .iter()
+                .copied()
+                .filter(|&word| satisfies_hard_mode(word, history)),
+        );
+        exclude_prior_guesses(out, tried);
+    }
+    out.sort();
+}
+
+/// Shared candidate-pool builder for main suggestions and 2-ply follow-ups.
+fn build_guess_pool<'a>(
     word_lists: &'a WordLists,
-    remaining_answers: &[Word],
+    remaining: &[Word],
     history: &[(Word, Pattern)],
     turns_left: Option<usize>,
     scratch: &'a mut CandidateBuffer,
 ) -> &'a [Word] {
-    if remaining_answers.is_empty() {
+    if remaining.is_empty() {
         return &[];
     }
 
-    if remaining_answers.len() <= 2 {
-        scratch.small_remaining = filter_remaining_compliant(remaining_answers, history);
-        if scratch.small_remaining.is_empty() {
-            scratch.small_remaining = remaining_answers
-                .iter()
-                .copied()
-                .filter(|&word| satisfies_hard_mode(word, history))
-                .collect();
-            exclude_prior_guesses(&mut scratch.small_remaining, history);
-        }
-        scratch.small_remaining.sort();
+    let tried = tried_guesses(history);
+
+    if remaining.len() <= 2 {
+        compliant_remaining_subset(remaining, history, &tried, &mut scratch.small_remaining);
         return &scratch.small_remaining;
     }
 
     if let Some(left) = turns_left {
-        let suffix_cluster = shares_fixed_suffix(remaining_answers);
-        if should_use_remaining_only(remaining_answers.len(), left)
-            && !(suffix_cluster && remaining_answers.len() > left)
+        let suffix_cluster = shares_fixed_suffix(remaining);
+        if should_use_remaining_only(remaining.len(), left)
+            && !(suffix_cluster && remaining.len() > left)
         {
-            scratch.small_remaining = filter_remaining_compliant(remaining_answers, history);
-            if scratch.small_remaining.is_empty() {
-                scratch.small_remaining = remaining_answers
-                    .iter()
-                    .copied()
-                    .filter(|&word| satisfies_hard_mode(word, history))
-                    .collect();
-            }
-            exclude_prior_guesses(&mut scratch.small_remaining, history);
-            scratch.small_remaining.sort();
+            compliant_remaining_subset(remaining, history, &tried, &mut scratch.small_remaining);
             return &scratch.small_remaining;
         }
     }
 
     fill_compliant_pool(scratch, word_lists, history);
 
-    if turns_left.is_some_and(|left| {
-        shares_fixed_suffix(remaining_answers) && remaining_answers.len() > left
-    }) {
-        exclude_prior_guesses(&mut scratch.compliant_pool, history);
+    if turns_left.is_some_and(|left| shares_fixed_suffix(remaining) && remaining.len() > left) {
+        exclude_prior_guesses(&mut scratch.compliant_pool, &tried);
         return &scratch.compliant_pool;
     }
 
     let pool = &scratch.compliant_pool;
 
-    if remaining_answers.len() > EARLY_GAME_REMAINING {
+    if remaining.len() > EARLY_GAME_REMAINING {
         scratch.early_game_pool.clear();
         let mut scored: Vec<(Word, usize)> = pool
             .iter()
@@ -149,25 +162,34 @@ pub fn select_guess_candidates<'a>(
                 .take(EARLY_GAME_CANDIDATES)
                 .map(|(w, _)| w),
         );
-        union_remaining_into(&mut scratch.early_game_pool, remaining_answers);
-        exclude_prior_guesses(&mut scratch.early_game_pool, history);
+        union_unique(
+            &mut scratch.early_game_pool,
+            remaining,
+            &mut scratch.seen,
+        );
+        exclude_prior_guesses(&mut scratch.early_game_pool, &tried);
         return &scratch.early_game_pool;
     }
 
-    union_remaining_into(&mut scratch.compliant_pool, remaining_answers);
-    exclude_prior_guesses(&mut scratch.compliant_pool, history);
+    union_unique(&mut scratch.compliant_pool, remaining, &mut scratch.seen);
+    exclude_prior_guesses(&mut scratch.compliant_pool, &tried);
     &scratch.compliant_pool
 }
 
-pub fn two_ply_candidate_indices(scores: &[GuessScore], remaining_len: usize) -> Vec<usize> {
-    if remaining_len <= FULL_TWO_PLY_REMAINING {
-        return (0..scores.len()).collect();
-    }
-
-    let mut indices: Vec<usize> = (0..scores.len()).collect();
-    indices.sort_by(|&a, &b| compare_one_ply(scores[b], scores[a]));
-    indices.truncate(TOP_TWO_PLY.min(indices.len()));
-    indices
+pub fn select_guess_candidates<'a>(
+    word_lists: &'a WordLists,
+    remaining_answers: &[Word],
+    history: &[(Word, Pattern)],
+    turns_left: Option<usize>,
+    scratch: &'a mut CandidateBuffer,
+) -> &'a [Word] {
+    build_guess_pool(
+        word_lists,
+        remaining_answers,
+        history,
+        turns_left,
+        scratch,
+    )
 }
 
 pub fn followup_guess_pool<'a>(
@@ -177,67 +199,28 @@ pub fn followup_guess_pool<'a>(
     turns_left: Option<usize>,
     scratch: &'a mut CandidateBuffer,
 ) -> &'a [Word] {
-    if subset.is_empty() {
-        return &[];
+    build_guess_pool(word_lists, subset, history, turns_left, scratch)
+}
+
+pub fn two_ply_candidate_indices(
+    scores: &[GuessScore],
+    remaining_len: usize,
+    turns_left: Option<usize>,
+) -> Vec<usize> {
+    if remaining_len <= FULL_TWO_PLY_REMAINING {
+        return (0..scores.len()).collect();
     }
 
-    if subset.len() <= 2 {
-        scratch.small_remaining = filter_remaining_compliant(subset, history);
-        if scratch.small_remaining.is_empty() {
-            scratch.small_remaining = subset
-                .iter()
-                .copied()
-                .filter(|&word| satisfies_hard_mode(word, history))
-                .collect();
-            exclude_prior_guesses(&mut scratch.small_remaining, history);
-        }
-        scratch.small_remaining.sort();
-        return &scratch.small_remaining;
-    }
+    let top_n = if turns_left.is_some_and(|left| left <= 3) {
+        TOP_TWO_PLY_TIGHT
+    } else {
+        TOP_TWO_PLY
+    };
 
-    if let Some(left) = turns_left {
-        if should_use_remaining_only(subset.len(), left)
-            && !(shares_fixed_suffix(subset) && subset.len() > left)
-        {
-            scratch.small_remaining = filter_remaining_compliant(subset, history);
-            if scratch.small_remaining.is_empty() {
-                scratch.small_remaining = subset
-                    .iter()
-                    .copied()
-                    .filter(|&word| satisfies_hard_mode(word, history))
-                    .collect();
-            }
-            exclude_prior_guesses(&mut scratch.small_remaining, history);
-            scratch.small_remaining.sort();
-            return &scratch.small_remaining;
-        }
-    }
-
-    fill_compliant_pool(scratch, word_lists, history);
-    let pool = &scratch.compliant_pool;
-
-    if subset.len() > EARLY_GAME_REMAINING {
-        scratch.early_game_pool.clear();
-        let mut scored: Vec<(Word, usize)> = pool
-            .iter()
-            .copied()
-            .map(|w| (w, w.unique_letter_count() * 10 + frequency_score(w)))
-            .collect();
-        scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        scratch.early_game_pool.extend(
-            scored
-                .into_iter()
-                .take(EARLY_GAME_CANDIDATES)
-                .map(|(w, _)| w),
-        );
-        union_remaining_into(&mut scratch.early_game_pool, subset);
-        exclude_prior_guesses(&mut scratch.early_game_pool, history);
-        return &scratch.early_game_pool;
-    }
-
-    union_remaining_into(&mut scratch.compliant_pool, subset);
-    exclude_prior_guesses(&mut scratch.compliant_pool, history);
-    &scratch.compliant_pool
+    let mut indices: Vec<usize> = (0..scores.len()).collect();
+    indices.sort_by(|&a, &b| compare_one_ply(scores[b], scores[a]));
+    indices.truncate(top_n.min(indices.len()));
+    indices
 }
 
 #[cfg(test)]
@@ -247,7 +230,7 @@ mod tests {
     use crate::core::words::WordLists;
 
     fn w(s: &str) -> Word {
-        Word::from_str(s).unwrap()
+        Word::parse(s).unwrap()
     }
 
     fn pat(s: &str) -> Pattern {
@@ -293,5 +276,19 @@ mod tests {
         for &word in candidates {
             assert!(satisfies_hard_mode(word, &history));
         }
+    }
+
+    #[test]
+    fn followup_matches_main_pool_for_suffix_cluster() {
+        let lists = WordLists::load();
+        let remaining: Vec<Word> = ["bound", "found", "hound", "mound", "pound", "round"]
+            .iter()
+            .map(|s| w(s))
+            .collect();
+        let mut main_scratch = CandidateBuffer::new();
+        let mut follow_scratch = CandidateBuffer::new();
+        let main = select_guess_candidates(&lists, &remaining, &[], Some(2), &mut main_scratch);
+        let follow = followup_guess_pool(&lists, &remaining, &[], Some(2), &mut follow_scratch);
+        assert_eq!(main, follow);
     }
 }
