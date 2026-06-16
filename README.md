@@ -97,9 +97,9 @@ Lists are extracted from NYT Wordle client data via community-maintained sources
 Quality-first solver, optimized for interactive use:
 
 - **Pattern cache** — all guess×answer feedback precomputed at startup (~0.5s once in release), then O(1) lookups per scoring step
-- **Interactive budget** — each UI suggestion completes within **10 seconds** (`GameState::suggest_next`); typical release latency ~0.8s after turn 2
-- **Smart candidate pool** — early game uses top 1000 heuristic guesses (580 in debug builds for the UI path) from the hard-mode-compliant pool plus all remaining answers; late game uses the compliant pool or remaining answers when few candidates remain
-- **2-ply lookahead** — top 45 candidates (60 when ≤3 turns left; all guesses when ≤25 answers remain); 1-ply metrics primary, 2-ply tie-breaker with hard-mode-aware follow-ups
+- **Interactive budget** — each UI suggestion completes within **10 seconds** (`GameState::suggest_next`); typical release latency ~2s after turn 2
+- **Smart candidate pool** — early game ranks ~2000 heuristic guesses by 1-ply entropy, keeps the top 1000 (470 in debug UI builds), plus all remaining answers; late game uses the compliant pool or remaining answers when few candidates remain
+- **2-ply lookahead** — UI path refines up to **110** top 1-ply candidates in release (~45 in debug); auto-solve/benchmarks use 55 (75 when ≤3 turns left; all guesses when ≤30 answers remain)
 - **Endgame heuristics** — minimax bucket sizing, off-list partition probes for suffix clusters, and forced-win search on tiny sets when turns are tight
 - **Opening guess** — **SLATE** (instant, no startup computation)
 - **Multi-criteria scoring** — entropy, minimax worst bucket, expected remaining, win-aware tie-break
@@ -120,6 +120,7 @@ The solver solves 100% of NYT answer words within 6 guesses with NYT hard-mode c
 ```bash
 cargo test --release --test integration -- --ignored --nocapture
 cargo run --release --bin solver-quality
+cargo run --release --bin suggestion-latency -- --full
 ```
 
 ## Project Structure

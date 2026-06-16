@@ -187,6 +187,7 @@ pub fn score_one_ply(
 struct TwoPlyScratch {
     followup_buffer: CandidateBuffer,
     partitions: [Vec<Word>; PATTERN_BUCKETS],
+    subset_set: HashSet<Word>,
 }
 
 impl TwoPlyScratch {
@@ -194,6 +195,7 @@ impl TwoPlyScratch {
         Self {
             followup_buffer: CandidateBuffer::new(),
             partitions: std::array::from_fn(|_| Vec::new()),
+            subset_set: HashSet::new(),
         }
     }
 
@@ -282,34 +284,32 @@ fn score_two_ply_with_scratch(
     let mut accumulated = 0.0;
     let followup_turns = turns_left.map(|left| left.saturating_sub(1));
 
-    let weighted_subsets: Vec<(Vec<Word>, f64)> = scratch
-        .partitions
-        .iter()
-        .filter(|s| !s.is_empty())
-        .map(|subset| (subset.clone(), subset.len() as f64 / total))
-        .collect();
-
-    for (subset, weight) in weighted_subsets {
+    for subset in &scratch.partitions {
+        if subset.is_empty() {
+            continue;
+        }
+        let weight = subset.len() as f64 / total;
         let followup = if subset.len() <= 1 {
             0.0
         } else {
-            let subset_set: HashSet<Word> = subset.iter().copied().collect();
+            scratch.subset_set.clear();
+            scratch.subset_set.extend(subset.iter().copied());
             let pattern = compute_feedback(score.word, subset[0]);
             let mut extended = Vec::with_capacity(history.len() + 1);
             extended.extend_from_slice(history);
             extended.push((score.word, pattern));
             let pool = followup_guess_pool(
                 word_lists,
-                &subset,
+                subset,
                 &extended,
                 followup_turns,
                 &mut scratch.followup_buffer,
             );
             best_followup_one_ply(
                 word_lists,
-                &subset,
+                subset,
                 pool,
-                &subset_set,
+                &scratch.subset_set,
                 followup_turns,
             )
         };

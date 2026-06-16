@@ -15,8 +15,8 @@ pub use score::{
 };
 
 use candidates::{
-    select_guess_candidates, shares_fixed_suffix, two_ply_candidate_indices, CandidateBuffer,
-    TURNS_LEFT_REMAINING_SLACK,
+    select_guess_candidates, shares_fixed_suffix, two_ply_interactive_cap,
+    two_ply_non_interactive_cap, CandidateBuffer, TURNS_LEFT_REMAINING_SLACK,
 };
 use score::partition_sufficient;
 
@@ -175,33 +175,70 @@ pub fn compute_suggestion(
             return None;
         }
 
+        let candidate_words: Vec<Word> = guess_candidates.to_vec();
+        let cached_one_ply = std::mem::take(&mut scratch.precomputed_one_ply);
+
         let budget_expired = || {
             budget_start.is_some_and(|t| t.elapsed() >= INTERACTIVE_SUGGESTION_BUDGET)
         };
 
-        let mut one_ply_scores: Vec<GuessScore> = Vec::with_capacity(guess_candidates.len());
-        for &guess in guess_candidates {
-            if budget_expired() {
-                break;
+        let one_ply_scores: Vec<GuessScore> = if !cached_one_ply.is_empty() {
+            let mut scores = Vec::with_capacity(candidate_words.len());
+            for &guess in &candidate_words {
+                if budget_expired() {
+                    break;
+                }
+                if let Some(score) = cached_one_ply.get(&guess) {
+                    scores.push(*score);
+                } else {
+                    scores.push(score_one_ply(
+                        word_lists,
+                        guess,
+                        remaining_answers,
+                        &ctx.remaining_set,
+                    ));
+                }
             }
-            one_ply_scores.push(score_one_ply(
-                word_lists,
-                guess,
-                remaining_answers,
-                &ctx.remaining_set,
-            ));
-        }
+            scores
+        } else {
+            let mut scores = Vec::with_capacity(candidate_words.len());
+            for &guess in &candidate_words {
+                if budget_expired() {
+                    break;
+                }
+                scores.push(score_one_ply(
+                    word_lists,
+                    guess,
+                    remaining_answers,
+                    &ctx.remaining_set,
+                ));
+            }
+            scores
+        };
 
         if one_ply_scores.is_empty() {
             return None;
         }
 
-        let refine_indices =
-            two_ply_candidate_indices(&one_ply_scores, remaining_answers.len(), turns_left);
+        let remaining_len = remaining_answers.len();
+        let max_refine = if interactive {
+            two_ply_interactive_cap(remaining_len, turns_left, one_ply_scores.len())
+        } else {
+            two_ply_non_interactive_cap(remaining_len, turns_left, one_ply_scores.len())
+        };
 
-        let mut refined_scores = Vec::with_capacity(refine_indices.len());
-        for idx in refine_indices {
-            if budget_expired() {
+        let mut sorted_indices: Vec<usize> = (0..one_ply_scores.len()).collect();
+        sorted_indices.sort_by(|&a, &b| {
+            compare_one_ply(
+                one_ply_scores[b],
+                one_ply_scores[a],
+                remaining_len,
+            )
+        });
+
+        let mut refined_scores = Vec::with_capacity(max_refine);
+        for (rank, &idx) in sorted_indices.iter().enumerate() {
+            if rank >= max_refine || budget_expired() {
                 break;
             }
             refined_scores.push(score_two_ply(
@@ -214,7 +251,6 @@ pub fn compute_suggestion(
             ));
         }
 
-        let remaining_len = remaining_answers.len();
         let mut best = one_ply_scores
             .iter()
             .copied()
@@ -549,8 +585,6 @@ pub fn auto_solve(word_lists: &WordLists, target: Word) -> Option<Vec<(Word, Pat
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use super::*;
     use crate::core::hard_mode::satisfies_hard_mode;
     use crate::core::pattern::Pattern;
