@@ -50,11 +50,11 @@ impl GameState {
         }
 
         let turns_left = 6usize.saturating_sub(self.turns.len());
-        let suggestion = crate::core::solver::suggest_guess_with_turns(
+        let suggestion = crate::core::solver::suggest_guess_interactive(
             &self.word_lists,
             &self.remaining_answers,
             &self.history,
-            Some(turns_left),
+            turns_left,
         )?;
         if !self.word_lists.is_valid_guess(suggestion.word) {
             return None;
@@ -246,5 +246,25 @@ mod tests {
         game.record_turn(w("slate"), pat("xxGGG")).unwrap();
         game.record_turn(w("crate"), pat("GGGGG")).unwrap();
         assert_eq!(incremental, game.remaining_answers());
+    }
+
+    #[test]
+    fn interactive_suggestion_within_budget() {
+        use std::time::Instant;
+
+        use crate::core::solver::INTERACTIVE_SUGGESTION_BUDGET;
+
+        let lists = Arc::new(crate::core::words::WordLists::load());
+        let mut game = GameState::new(lists);
+        game.record_turn(w("slate"), pat("xxxxx")).unwrap();
+
+        let start = Instant::now();
+        assert!(game.suggest_next().is_some());
+        assert!(
+            start.elapsed() <= INTERACTIVE_SUGGESTION_BUDGET,
+            "suggest_next took {:.2}s (budget {:.0}s)",
+            start.elapsed().as_secs_f64(),
+            INTERACTIVE_SUGGESTION_BUDGET.as_secs_f64()
+        );
     }
 }

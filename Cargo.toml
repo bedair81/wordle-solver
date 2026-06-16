@@ -9,6 +9,14 @@ default-run = "wordle-solver"
 name = "solver-quality"
 path = "src/bin/solver-quality.rs"
 
+[[bin]]
+name = "opening-benchmark"
+path = "src/bin/opening-benchmark.rs"
+
+[[bin]]
+name = "suggestion-latency"
+path = "src/bin/suggestion-latency.rs"
+
 [dependencies]
 ratatui = "0.29"
 crossterm = "0.28"

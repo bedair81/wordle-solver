@@ -62,8 +62,10 @@ pub struct GuessScore {
 const TIGHT_TURNS_PARTITION_CUTOFF: usize = 4;
 
 /// 1-ply entropies within this gap (bits) are treated as tied; consult 2-ply next.
-/// Small enough to catch near-ties without overriding clear entropy winners.
-const TWO_PLY_TIE_EPSILON: f64 = 0.015;
+const TWO_PLY_TIE_EPSILON: f64 = 0.022;
+
+/// Prefer guessing from remaining answers only when the candidate pool is small.
+const ANSWER_PREFERENCE_MAX_REMAINING: usize = 8;
 
 /// Largest bucket after a guess must be solvable in the turns still available after it.
 pub(crate) fn partition_sufficient(max_bucket: usize, turns_left: usize) -> bool {
@@ -74,6 +76,7 @@ pub fn compare_final(
     a: GuessScore,
     b: GuessScore,
     turns_left: Option<usize>,
+    remaining_len: usize,
 ) -> std::cmp::Ordering {
     // Endgame minimax: when turns are tight, prefer guesses that keep every feedback
     // bucket small enough to finish. Applies regardless of remaining count (unlike
@@ -100,13 +103,17 @@ pub fn compare_final(
         a.two_ply_entropy
             .partial_cmp(&b.two_ply_entropy)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| compare_one_ply(a, b))
+            .then_with(|| compare_one_ply(a, b, remaining_len))
     } else {
-        compare_one_ply(a, b)
+        compare_one_ply(a, b, remaining_len)
     }
 }
 
-pub fn compare_one_ply(a: GuessScore, b: GuessScore) -> std::cmp::Ordering {
+pub fn compare_one_ply(
+    a: GuessScore,
+    b: GuessScore,
+    remaining_len: usize,
+) -> std::cmp::Ordering {
     a.one_ply_entropy
         .partial_cmp(&b.one_ply_entropy)
         .unwrap_or(std::cmp::Ordering::Equal)
@@ -116,9 +123,18 @@ pub fn compare_one_ply(a: GuessScore, b: GuessScore) -> std::cmp::Ordering {
                 .partial_cmp(&a.expected_remaining)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
-        .then_with(|| a.is_possible_answer.cmp(&b.is_possible_answer))
         .then_with(|| {
-            if a.is_possible_answer && b.is_possible_answer {
+            if remaining_len <= ANSWER_PREFERENCE_MAX_REMAINING {
+                a.is_possible_answer.cmp(&b.is_possible_answer)
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .then_with(|| {
+            if remaining_len <= ANSWER_PREFERENCE_MAX_REMAINING
+                && a.is_possible_answer
+                && b.is_possible_answer
+            {
                 a.word.cmp(&b.word)
             } else {
                 std::cmp::Ordering::Equal
@@ -171,6 +187,7 @@ pub fn score_one_ply(
 struct TwoPlyScratch {
     followup_buffer: CandidateBuffer,
     partitions: [Vec<Word>; PATTERN_BUCKETS],
+    subset_set: HashSet<Word>,
 }
 
 impl TwoPlyScratch {
@@ -178,6 +195,7 @@ impl TwoPlyScratch {
         Self {
             followup_buffer: CandidateBuffer::new(),
             partitions: std::array::from_fn(|_| Vec::new()),
+            subset_set: HashSet::new(),
         }
     }
 
@@ -192,7 +210,12 @@ thread_local! {
     static TWO_PLY_SCRATCH: RefCell<TwoPlyScratch> = RefCell::new(TwoPlyScratch::new());
 }
 
-fn compare_followup(a: GuessScore, b: GuessScore, turns_left: Option<usize>) -> std::cmp::Ordering {
+fn compare_followup(
+    a: GuessScore,
+    b: GuessScore,
+    turns_left: Option<usize>,
+    remaining_len: usize,
+) -> std::cmp::Ordering {
     if let Some(left) = turns_left {
         if left <= TIGHT_TURNS_PARTITION_CUTOFF && a.worst_bucket != b.worst_bucket {
             let a_ok = partition_sufficient(a.worst_bucket, left);
@@ -204,7 +227,7 @@ fn compare_followup(a: GuessScore, b: GuessScore, turns_left: Option<usize>) -> 
             }
         }
     }
-    compare_one_ply(a, b)
+    compare_one_ply(a, b, remaining_len)
 }
 
 /// Best follow-up entropy for 2-ply scoring. Uses turn-aware minimax when guesses are tight.
@@ -228,16 +251,16 @@ fn best_followup_one_ply(
     guess_pool
         .iter()
         .map(|&guess| score_one_ply(word_lists, guess, remaining, remaining_set))
-        .max_by(|a, b| compare_followup(*a, *b, turns_left))
+        .max_by(|a, b| compare_followup(*a, *b, turns_left, remaining.len()))
         .map(|s| s.one_ply_entropy)
         .unwrap_or(0.0)
 }
 
-pub fn score_two_ply(
+fn score_two_ply_with_scratch(
+    scratch: &mut TwoPlyScratch,
     word_lists: &WordLists,
     mut score: GuessScore,
     remaining: &[Word],
-    _remaining_set: &HashSet<Word>,
     history: &[(Word, Pattern)],
     turns_left: Option<usize>,
 ) -> GuessScore {
@@ -248,57 +271,72 @@ pub fn score_two_ply(
         return score;
     }
 
+    scratch.clear_partitions();
+
+    for &answer in remaining {
+        let idx = word_lists
+            .pattern_cache
+            .bucket_or_compute(score.word, answer);
+        scratch.partitions[idx].push(answer);
+    }
+
+    let total = remaining.len() as f64;
+    let mut accumulated = 0.0;
+    let followup_turns = turns_left.map(|left| left.saturating_sub(1));
+
+    for subset in &scratch.partitions {
+        if subset.is_empty() {
+            continue;
+        }
+        let weight = subset.len() as f64 / total;
+        let followup = if subset.len() <= 1 {
+            0.0
+        } else {
+            scratch.subset_set.clear();
+            scratch.subset_set.extend(subset.iter().copied());
+            let pattern = compute_feedback(score.word, subset[0]);
+            let mut extended = Vec::with_capacity(history.len() + 1);
+            extended.extend_from_slice(history);
+            extended.push((score.word, pattern));
+            let pool = followup_guess_pool(
+                word_lists,
+                subset,
+                &extended,
+                followup_turns,
+                &mut scratch.followup_buffer,
+            );
+            best_followup_one_ply(
+                word_lists,
+                subset,
+                pool,
+                &scratch.subset_set,
+                followup_turns,
+            )
+        };
+        accumulated += weight * followup;
+    }
+
+    score.two_ply_entropy = accumulated;
+    score
+}
+
+pub fn score_two_ply(
+    word_lists: &WordLists,
+    score: GuessScore,
+    remaining: &[Word],
+    _remaining_set: &HashSet<Word>,
+    history: &[(Word, Pattern)],
+    turns_left: Option<usize>,
+) -> GuessScore {
     TWO_PLY_SCRATCH.with(|scratch| {
-        let mut scratch = scratch.borrow_mut();
-        scratch.clear_partitions();
-
-        for &answer in remaining {
-            let idx = word_lists
-                .pattern_cache
-                .bucket_or_compute(score.word, answer);
-            scratch.partitions[idx].push(answer);
-        }
-
-        let total = remaining.len() as f64;
-        let mut two_ply = 0.0;
-        let followup_turns = turns_left.map(|left| left.saturating_sub(1));
-
-        let weighted_subsets: Vec<(Vec<Word>, f64)> = scratch
-            .partitions
-            .iter()
-            .filter(|s| !s.is_empty())
-            .map(|subset| (subset.clone(), subset.len() as f64 / total))
-            .collect();
-
-        for (subset, weight) in weighted_subsets {
-            let followup = if subset.len() <= 1 {
-                0.0
-            } else {
-                let subset_set: HashSet<Word> = subset.iter().copied().collect();
-                let pattern = compute_feedback(score.word, subset[0]);
-                let mut extended = Vec::with_capacity(history.len() + 1);
-                extended.extend_from_slice(history);
-                extended.push((score.word, pattern));
-                let pool = followup_guess_pool(
-                    word_lists,
-                    &subset,
-                    &extended,
-                    followup_turns,
-                    &mut scratch.followup_buffer,
-                );
-                best_followup_one_ply(
-                    word_lists,
-                    &subset,
-                    pool,
-                    &subset_set,
-                    followup_turns,
-                )
-            };
-            two_ply += weight * followup;
-        }
-
-        score.two_ply_entropy = two_ply;
-        score
+        score_two_ply_with_scratch(
+            &mut scratch.borrow_mut(),
+            word_lists,
+            score,
+            remaining,
+            history,
+            turns_left,
+        )
     })
 }
 
@@ -338,15 +376,15 @@ mod tests {
     fn prefers_possible_answer_on_one_ply_tie() {
         let answer = gs("crate", 0.0, 1.0, 2, 1.0, true);
         let probe = gs("slate", 0.0, 1.0, 2, 1.0, false);
-        assert_eq!(compare_one_ply(answer, probe), std::cmp::Ordering::Greater);
-        assert_eq!(compare_one_ply(probe, answer), std::cmp::Ordering::Less);
+        assert_eq!(compare_one_ply(answer, probe, 4), std::cmp::Ordering::Greater);
+        assert_eq!(compare_one_ply(probe, answer, 4), std::cmp::Ordering::Less);
     }
 
     #[test]
     fn compare_one_ply_prefers_smaller_worst_bucket_on_entropy_tie() {
         let better = gs("crate", 0.0, 1.0, 1, 1.5, false);
         let worse = gs("slate", 0.0, 1.0, 3, 1.5, false);
-        assert_eq!(compare_one_ply(better, worse), std::cmp::Ordering::Greater);
+        assert_eq!(compare_one_ply(better, worse, 100), std::cmp::Ordering::Greater);
     }
 
     #[test]
@@ -362,15 +400,15 @@ mod tests {
     fn compare_final_prefers_two_ply_on_entropy_tie() {
         let a = gs("slate", 2.5, 1.0, 4, 3.0, false);
         let b = gs("crane", 2.0, 1.01, 4, 3.0, true);
-        assert_eq!(compare_final(a, b, None), std::cmp::Ordering::Greater);
-        assert_eq!(compare_final(b, a, None), std::cmp::Ordering::Less);
+        assert_eq!(compare_final(a, b, None, 100), std::cmp::Ordering::Greater);
+        assert_eq!(compare_final(b, a, None, 100), std::cmp::Ordering::Less);
     }
 
     #[test]
     fn compare_final_two_ply_tie_falls_back_to_one_ply() {
         let a = gs("slate", 2.0, 1.0, 4, 3.0, false);
         let b = gs("crane", 2.0, 1.01, 4, 3.0, true);
-        assert_eq!(compare_final(a, b, None), std::cmp::Ordering::Less);
+        assert_eq!(compare_final(a, b, None, 100), std::cmp::Ordering::Less);
     }
 
     #[test]
@@ -378,16 +416,16 @@ mod tests {
         let high_two_ply = gs("slate", 2.0, 1.0, 4, 3.0, false);
         let low_two_ply = gs("crane", 1.0, 1.014, 4, 3.0, true);
         assert_eq!(
-            compare_final(high_two_ply, low_two_ply, None),
+            compare_final(high_two_ply, low_two_ply, None, 100),
             std::cmp::Ordering::Greater,
             "gap 0.014 is within epsilon"
         );
 
-        let outside = gs("crane", 1.0, 1.016, 4, 3.0, true);
+        let outside = gs("crane", 1.0, 1.023, 4, 3.0, true);
         assert_eq!(
-            compare_final(high_two_ply, outside, None),
+            compare_final(high_two_ply, outside, None, 100),
             std::cmp::Ordering::Less,
-            "gap 0.016 exceeds epsilon; higher 1-ply entropy wins"
+            "gap 0.023 exceeds epsilon; higher 1-ply entropy wins"
         );
     }
 
@@ -396,7 +434,7 @@ mod tests {
         let good = gs("slate", 0.0, 1.5, 2, 2.0, false);
         let bad = gs("crane", 0.0, 2.0, 5, 2.0, true);
         assert_eq!(
-            compare_final(good, bad, Some(3)),
+            compare_final(good, bad, Some(3), 8),
             std::cmp::Ordering::Greater
         );
     }
@@ -406,7 +444,7 @@ mod tests {
         let smaller = gs("slate", 0.0, 1.0, 2, 2.0, false);
         let larger = gs("crane", 0.0, 3.0, 3, 2.0, true);
         assert_eq!(
-            compare_final(smaller, larger, Some(4)),
+            compare_final(smaller, larger, Some(4), 8),
             std::cmp::Ordering::Greater
         );
     }
@@ -416,7 +454,7 @@ mod tests {
         let smaller = gs("slate", 0.0, 1.0, 5, 2.0, false);
         let larger = gs("crane", 0.0, 3.0, 8, 2.0, true);
         assert_eq!(
-            compare_final(smaller, larger, Some(3)),
+            compare_final(smaller, larger, Some(3), 8),
             std::cmp::Ordering::Greater
         );
     }
@@ -426,12 +464,12 @@ mod tests {
         let good = gs("slate", 0.0, 1.0, 2, 2.0, false);
         let bad = gs("crane", 0.0, 3.0, 6, 2.0, true);
         assert_eq!(
-            compare_final(good, bad, Some(4)),
+            compare_final(good, bad, Some(4), 8),
             std::cmp::Ordering::Greater,
             "partition branch active at 4 turns"
         );
         assert_eq!(
-            compare_final(good, bad, Some(5)),
+            compare_final(good, bad, Some(5), 100),
             std::cmp::Ordering::Less,
             "at 5 turns higher entropy wins despite worse bucket"
         );
@@ -442,7 +480,7 @@ mod tests {
         let good = gs("slate", 0.0, 0.5, 2, 50.0, false);
         let bad = gs("crane", 0.0, 3.0, 20, 50.0, true);
         assert_eq!(
-            compare_final(good, bad, Some(4)),
+            compare_final(good, bad, Some(4), 8),
             std::cmp::Ordering::Greater
         );
     }
@@ -452,7 +490,7 @@ mod tests {
         let high_two_ply = gs("slate", 2.5, 1.0, 3, 2.0, false);
         let low_two_ply = gs("crane", 1.0, 1.01, 3, 2.0, true);
         assert_eq!(
-            compare_final(high_two_ply, low_two_ply, Some(3)),
+            compare_final(high_two_ply, low_two_ply, Some(3), 8),
             std::cmp::Ordering::Greater,
             "equal worst_bucket skips partition branch; epsilon + 2-ply decides"
         );
@@ -463,7 +501,7 @@ mod tests {
         let better_two_ply = gs("slate", 3.0, 1.0, 5, 3.0, false);
         let worse_two_ply = gs("crane", 1.0, 1.01, 2, 3.0, true);
         assert_eq!(
-            compare_final(better_two_ply, worse_two_ply, None),
+            compare_final(better_two_ply, worse_two_ply, None, 100),
             std::cmp::Ordering::Greater
         );
     }
@@ -516,7 +554,7 @@ mod tests {
         let slate = score_refined_ound(&lists, w("slate"), &remaining, &remaining_set);
         let taint = score_refined_ound(&lists, w("taint"), &remaining, &remaining_set);
         assert_eq!(
-            compare_final(slate, taint, Some(3)),
+            compare_final(slate, taint, Some(3), 8),
             std::cmp::Ordering::Greater,
             "slate (worst=7) beats taint trap (worst=8)"
         );
@@ -528,7 +566,7 @@ mod tests {
             .collect();
         let best = refined
             .iter()
-            .max_by(|a, b| compare_final(**a, **b, Some(3)))
+            .max_by(|a, b| compare_final(**a, **b, Some(3), 8))
             .expect("at least one guess");
         assert_eq!(best.word, w("slate"));
         assert_eq!(best.worst_bucket, 7);
