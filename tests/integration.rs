@@ -75,8 +75,8 @@ fn auto_solves_all_answers_within_six_guesses() {
         "worst-case word required {worst} guesses (target <= 6)"
     );
     assert!(
-        avg <= 3.56,
-        "average guesses too high: {avg:.3} (target <= 3.56)"
+        avg <= 3.54,
+        "average guesses too high: {avg:.3} (target <= 3.54)"
     );
 }
 
@@ -208,7 +208,7 @@ fn compare_final_picks_better_partition_in_ound_cluster() {
         Some(3),
     );
     assert_eq!(
-        compare_final(slate, taint, Some(3)),
+        compare_final(slate, taint, Some(3), 8),
         std::cmp::Ordering::Greater
     );
 
@@ -221,7 +221,7 @@ fn compare_final_picks_better_partition_in_ound_cluster() {
         .collect();
     let best = refined
         .iter()
-        .max_by(|a, b| compare_final(**a, **b, Some(3)))
+        .max_by(|a, b| compare_final(**a, **b, Some(3), 8))
         .expect("guesses scored");
     assert_eq!(best.word, Word::parse("slate").unwrap());
     assert_eq!(best.worst_bucket, 7);

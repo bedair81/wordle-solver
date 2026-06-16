@@ -7,11 +7,11 @@ use crate::core::words::WordLists;
 
 use super::score::{compare_one_ply, frequency_score, GuessScore};
 
-const TOP_TWO_PLY: usize = 30;
-const TOP_TWO_PLY_TIGHT: usize = 50;
-const FULL_TWO_PLY_REMAINING: usize = 30;
+const TOP_TWO_PLY: usize = 45;
+const TOP_TWO_PLY_TIGHT: usize = 60;
+const FULL_TWO_PLY_REMAINING: usize = 25;
 const EARLY_GAME_REMAINING: usize = 500;
-const EARLY_GAME_CANDIDATES: usize = 800;
+const EARLY_GAME_CANDIDATES: usize = 1000;
 /// When this many answers remain, only guess from the remaining set (hard-mode filtered).
 /// When guesses left is tight, bias toward remaining answers (unless they share a suffix).
 pub const TURNS_LEFT_REMAINING_SLACK: usize = 2;
@@ -218,7 +218,7 @@ pub fn two_ply_candidate_indices(
     };
 
     let mut indices: Vec<usize> = (0..scores.len()).collect();
-    indices.sort_by(|&a, &b| compare_one_ply(scores[b], scores[a]));
+    indices.sort_by(|&a, &b| compare_one_ply(scores[b], scores[a], remaining_len));
     indices.truncate(top_n.min(indices.len()));
     indices
 }

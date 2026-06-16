@@ -43,7 +43,15 @@ fn main() {
         println!("  {} guesses: {count}", i + 1);
     }
 
-    if let Some(hard) = by_guesses.get(&worst) {
+    if let Some(hard) = by_guesses.get(&6) {
+        println!();
+        println!("Hardest words (6 guesses):");
+        let mut hard = hard.clone();
+        hard.sort();
+        for word in &hard {
+            println!("  {word}");
+        }
+    } else if let Some(hard) = by_guesses.get(&worst) {
         println!();
         println!("Hardest words ({worst} guesses):");
         let mut hard = hard.clone();

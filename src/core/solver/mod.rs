@@ -10,7 +10,9 @@ use crate::core::pattern::Pattern;
 use crate::core::word::Word;
 use crate::core::words::WordLists;
 
-pub use score::{compare_final, compare_one_ply, score_one_ply, score_two_ply, GuessScore};
+pub use score::{
+    compare_final, compare_one_ply, score_one_ply, score_two_ply, GuessScore,
+};
 
 use candidates::{
     select_guess_candidates, shares_fixed_suffix, two_ply_candidate_indices, CandidateBuffer,
@@ -29,7 +31,7 @@ pub struct Suggestion {
 }
 
 const ENDGAME_PROBE_MAX_REMAINING: usize = 16;
-const MINIMAX_MIDGAME_MAX_REMAINING: usize = 80;
+const MINIMAX_MIDGAME_MAX_REMAINING: usize = 50;
 
 thread_local! {
     static CANDIDATE_SCRATCH: std::cell::RefCell<CandidateBuffer> =
@@ -171,7 +173,7 @@ pub fn compute_suggestion(
 
         let best = refined_scores
             .into_iter()
-            .max_by(|a, b| compare_final(*a, *b, turns_left))?;
+            .max_by(|a, b| compare_final(*a, *b, turns_left, remaining_answers.len()))?;
 
         Some(Suggestion {
             word: best.word,
@@ -184,11 +186,11 @@ pub fn compute_suggestion(
 fn try_heuristic_pick(ctx: &SolverContext<'_>) -> Option<Word> {
     let remaining_len = ctx.remaining.len();
 
-    // Mid-game: minimize worst bucket before entropy picks a trap (e.g. taint → *aunt).
+    // Mid-game minimax: only when turns are tight — avoids overriding 2-ply on early turns.
     if ctx.turns_left.is_some_and(|left| {
         remaining_len > ENDGAME_PROBE_MAX_REMAINING
             && remaining_len <= MINIMAX_MIDGAME_MAX_REMAINING
-            && left >= 2
+            && (2..=4).contains(&left)
     }) {
         if let Some(word) = best_minimax_compliant_pick(ctx, false) {
             return Some(word);
