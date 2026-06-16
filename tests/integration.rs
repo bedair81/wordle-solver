@@ -236,8 +236,8 @@ fn compute_suggestion_respects_turns_left_in_endgame() {
     .iter()
     .map(|s| Word::parse(s).unwrap())
     .collect();
-    let with_turns = compute_suggestion(&lists, &remaining, &[], Some(3)).unwrap();
-    let open_ended = compute_suggestion(&lists, &remaining, &[], None).unwrap();
+    let with_turns = compute_suggestion(&lists, &remaining, &[], Some(3), false).unwrap();
+    let open_ended = compute_suggestion(&lists, &remaining, &[], None, false).unwrap();
 
     assert_eq!(with_turns.word, Word::parse("barfs").unwrap());
     assert_eq!(open_ended.word, Word::parse("herms").unwrap());

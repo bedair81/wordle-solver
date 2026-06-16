@@ -12,6 +12,11 @@ const TOP_TWO_PLY_TIGHT: usize = 60;
 const FULL_TWO_PLY_REMAINING: usize = 25;
 const EARLY_GAME_REMAINING: usize = 500;
 const EARLY_GAME_CANDIDATES: usize = 1000;
+/// Smaller early-game pool for the UI path in debug builds (keeps suggestions under 10s).
+#[cfg(debug_assertions)]
+const INTERACTIVE_EARLY_CANDIDATES: usize = 580;
+#[cfg(not(debug_assertions))]
+const INTERACTIVE_EARLY_CANDIDATES: usize = 1000;
 /// When this many answers remain, only guess from the remaining set (hard-mode filtered).
 /// When guesses left is tight, bias toward remaining answers (unless they share a suffix).
 pub const TURNS_LEFT_REMAINING_SLACK: usize = 2;
@@ -116,6 +121,7 @@ fn build_guess_pool<'a>(
     remaining: &[Word],
     history: &[(Word, Pattern)],
     turns_left: Option<usize>,
+    interactive: bool,
     scratch: &'a mut CandidateBuffer,
 ) -> &'a [Word] {
     if remaining.is_empty() {
@@ -150,6 +156,11 @@ fn build_guess_pool<'a>(
 
     if remaining.len() > EARLY_GAME_REMAINING {
         scratch.early_game_pool.clear();
+        let cap = if interactive {
+            INTERACTIVE_EARLY_CANDIDATES.min(EARLY_GAME_CANDIDATES)
+        } else {
+            EARLY_GAME_CANDIDATES
+        };
         let mut scored: Vec<(Word, usize)> = pool
             .iter()
             .copied()
@@ -159,7 +170,7 @@ fn build_guess_pool<'a>(
         scratch.early_game_pool.extend(
             scored
                 .into_iter()
-                .take(EARLY_GAME_CANDIDATES)
+                .take(cap)
                 .map(|(w, _)| w),
         );
         union_unique(
@@ -181,6 +192,7 @@ pub fn select_guess_candidates<'a>(
     remaining_answers: &[Word],
     history: &[(Word, Pattern)],
     turns_left: Option<usize>,
+    interactive: bool,
     scratch: &'a mut CandidateBuffer,
 ) -> &'a [Word] {
     build_guess_pool(
@@ -188,6 +200,7 @@ pub fn select_guess_candidates<'a>(
         remaining_answers,
         history,
         turns_left,
+        interactive,
         scratch,
     )
 }
@@ -199,7 +212,7 @@ pub fn followup_guess_pool<'a>(
     turns_left: Option<usize>,
     scratch: &'a mut CandidateBuffer,
 ) -> &'a [Word] {
-    build_guess_pool(word_lists, subset, history, turns_left, scratch)
+    build_guess_pool(word_lists, subset, history, turns_left, false, scratch)
 }
 
 pub fn two_ply_candidate_indices(
@@ -243,7 +256,7 @@ mod tests {
         let history = vec![(w("slate"), pat("Gxxxx"))];
         let remaining = vec![w("snake"), w("stand")];
         let mut scratch = CandidateBuffer::new();
-        let candidates = select_guess_candidates(&lists, &remaining, &history, None, &mut scratch);
+        let candidates = select_guess_candidates(&lists, &remaining, &history, None, false, &mut scratch);
         assert!(!candidates.is_empty());
         for &word in candidates {
             assert!(satisfies_hard_mode(word, &history));
@@ -271,7 +284,7 @@ mod tests {
         let remaining = vec![w("snare"), w("snake")];
         let mut scratch = CandidateBuffer::new();
         let candidates =
-            select_guess_candidates(&lists, &remaining, &history, Some(3), &mut scratch);
+            select_guess_candidates(&lists, &remaining, &history, Some(3), false, &mut scratch);
         assert!(!candidates.is_empty());
         for &word in candidates {
             assert!(satisfies_hard_mode(word, &history));
@@ -287,7 +300,7 @@ mod tests {
             .collect();
         let mut main_scratch = CandidateBuffer::new();
         let mut follow_scratch = CandidateBuffer::new();
-        let main = select_guess_candidates(&lists, &remaining, &[], Some(2), &mut main_scratch);
+        let main = select_guess_candidates(&lists, &remaining, &[], Some(2), false, &mut main_scratch);
         let follow = followup_guess_pool(&lists, &remaining, &[], Some(2), &mut follow_scratch);
         assert_eq!(main, follow);
     }

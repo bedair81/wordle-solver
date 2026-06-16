@@ -33,6 +33,10 @@ pub struct Suggestion {
 const ENDGAME_PROBE_MAX_REMAINING: usize = 16;
 const MINIMAX_MIDGAME_MAX_REMAINING: usize = 50;
 
+/// Max time for a single UI suggestion (after the user commits a turn).
+pub const INTERACTIVE_SUGGESTION_BUDGET: std::time::Duration =
+    std::time::Duration::from_secs(10);
+
 thread_local! {
     static CANDIDATE_SCRATCH: std::cell::RefCell<CandidateBuffer> =
         std::cell::RefCell::new(CandidateBuffer::new());
@@ -103,7 +107,31 @@ pub fn suggest_guess_with_turns(
         return Some(word_lists.opening_suggestion());
     }
 
-    compute_suggestion(word_lists, remaining_answers, history, turns_left)
+    compute_suggestion(word_lists, remaining_answers, history, turns_left, false)
+}
+
+/// UI path: enforces [`INTERACTIVE_SUGGESTION_BUDGET`] so suggestions appear promptly.
+pub fn suggest_guess_interactive(
+    word_lists: &WordLists,
+    remaining_answers: &[Word],
+    history: &[(Word, Pattern)],
+    turns_left: usize,
+) -> Option<Suggestion> {
+    if remaining_answers.is_empty() {
+        return None;
+    }
+
+    if history.is_empty() && remaining_answers.len() == word_lists.answers.len() {
+        return Some(word_lists.opening_suggestion());
+    }
+
+    compute_suggestion(
+        word_lists,
+        remaining_answers,
+        history,
+        Some(turns_left),
+        true,
+    )
 }
 
 pub fn compute_suggestion(
@@ -111,6 +139,7 @@ pub fn compute_suggestion(
     remaining_answers: &[Word],
     history: &[(Word, Pattern)],
     turns_left: Option<usize>,
+    interactive: bool,
 ) -> Option<Suggestion> {
     if remaining_answers.len() == 1 {
         let word = remaining_answers[0];
@@ -132,11 +161,13 @@ pub fn compute_suggestion(
 
     CANDIDATE_SCRATCH.with(|scratch| {
         let mut scratch = scratch.borrow_mut();
+        let budget_start = interactive.then(std::time::Instant::now);
         let guess_candidates = select_guess_candidates(
             word_lists,
             remaining_answers,
             history,
             turns_left,
+            interactive,
             &mut scratch,
         );
 
@@ -144,23 +175,35 @@ pub fn compute_suggestion(
             return None;
         }
 
-        let one_ply_scores: Vec<GuessScore> = guess_candidates
-            .iter()
-            .map(|&guess| {
-                score_one_ply(
-                    word_lists,
-                    guess,
-                    remaining_answers,
-                    &ctx.remaining_set,
-                )
-            })
-            .collect();
+        let budget_expired = || {
+            budget_start.is_some_and(|t| t.elapsed() >= INTERACTIVE_SUGGESTION_BUDGET)
+        };
+
+        let mut one_ply_scores: Vec<GuessScore> = Vec::with_capacity(guess_candidates.len());
+        for &guess in guess_candidates {
+            if budget_expired() {
+                break;
+            }
+            one_ply_scores.push(score_one_ply(
+                word_lists,
+                guess,
+                remaining_answers,
+                &ctx.remaining_set,
+            ));
+        }
+
+        if one_ply_scores.is_empty() {
+            return None;
+        }
 
         let refine_indices =
             two_ply_candidate_indices(&one_ply_scores, remaining_answers.len(), turns_left);
 
         let mut refined_scores = Vec::with_capacity(refine_indices.len());
         for idx in refine_indices {
+            if budget_expired() {
+                break;
+            }
             refined_scores.push(score_two_ply(
                 word_lists,
                 one_ply_scores[idx],
@@ -171,9 +214,18 @@ pub fn compute_suggestion(
             ));
         }
 
-        let best = refined_scores
-            .into_iter()
-            .max_by(|a, b| compare_final(*a, *b, turns_left, remaining_answers.len()))?;
+        let remaining_len = remaining_answers.len();
+        let mut best = one_ply_scores
+            .iter()
+            .copied()
+            .max_by(|a, b| compare_final(*a, *b, turns_left, remaining_len))?;
+
+        for score in refined_scores {
+            if compare_final(score, best, turns_left, remaining_len) == std::cmp::Ordering::Greater
+            {
+                best = score;
+            }
+        }
 
         Some(Suggestion {
             word: best.word,
@@ -576,7 +628,7 @@ mod tests {
         let lists = WordLists::load();
         let history = vec![(w("slate"), pat("Gxxxx"))];
         let remaining = vec![w("crane")];
-        assert!(compute_suggestion(&lists, &remaining, &history, Some(3)).is_none());
+        assert!(compute_suggestion(&lists, &remaining, &history, Some(3), false).is_none());
     }
 
     #[test]
@@ -584,7 +636,7 @@ mod tests {
         let lists = WordLists::load();
         let history = vec![(w("slate"), pat("xxxxx"))];
         let remaining = vec![w("crane")];
-        let suggestion = compute_suggestion(&lists, &remaining, &history, Some(3)).unwrap();
+        let suggestion = compute_suggestion(&lists, &remaining, &history, Some(3), false).unwrap();
         assert_eq!(suggestion.word, w("crane"));
     }
 
@@ -593,7 +645,7 @@ mod tests {
         let lists = WordLists::load();
         let history = vec![(w("aaaaa"), pat("GGGGG")), (w("bbbbb"), pat("GGGGG"))];
         let remaining = vec![w("crane")];
-        assert!(compute_suggestion(&lists, &remaining, &history, None).is_none());
+        assert!(compute_suggestion(&lists, &remaining, &history, None, false).is_none());
     }
 
     #[test]
@@ -639,7 +691,7 @@ mod tests {
         let ctx = SolverContext::new(&lists, &remaining, &[], Some(1));
         let expected_probe = best_offlist_partition_probe(&ctx).unwrap();
 
-        let suggestion = compute_suggestion(&lists, &remaining, &[], Some(1)).unwrap();
+        let suggestion = compute_suggestion(&lists, &remaining, &[], Some(1), false).unwrap();
         let expected = score_one_ply(&lists, suggestion.word, &remaining, &ctx.remaining_set);
 
         assert_eq!(
@@ -674,8 +726,8 @@ mod tests {
             w("sound"),
             w("wound"),
         ];
-        let with_turns = compute_suggestion(&lists, &remaining, &[], Some(3)).unwrap();
-        let open_ended = compute_suggestion(&lists, &remaining, &[], None).unwrap();
+        let with_turns = compute_suggestion(&lists, &remaining, &[], Some(3), false).unwrap();
+        let open_ended = compute_suggestion(&lists, &remaining, &[], None, false).unwrap();
 
         assert_eq!(
             with_turns.word,
