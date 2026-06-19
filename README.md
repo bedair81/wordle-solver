@@ -87,7 +87,7 @@ The solver only suggests guesses that satisfy these constraints. Solver Aid reje
 
 Bundled under `data/`:
 
-- `answers.txt` — NYT solution words (~2,309)
+- `answers.txt` — NYT solution words (~2,350): fredoverflow answer pool merged with [eithan/wordlelist](https://github.com/eithan/wordlelist) (daily NYT API archive, includes recent additions like `emoji`)
 - `allowed_guesses.txt` — additional valid guesses (~10,662)
 
 Lists are extracted from NYT Wordle client data via community-maintained sources and may drift if NYT updates their dictionary.

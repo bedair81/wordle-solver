@@ -1,6 +1,7 @@
 use crate::core::feedback::compute_feedback;
 use crate::core::pattern::Pattern;
 use crate::core::word::Word;
+use crate::core::words::WordLists;
 
 pub fn filter_candidates(candidates: &[Word], guess: Word, pattern: Pattern) -> Vec<Word> {
     candidates
@@ -16,6 +17,22 @@ pub fn filter_by_history(candidates: &[Word], history: &[(Word, Pattern)]) -> Ve
         remaining = filter_candidates(&remaining, guess, pattern);
     }
     remaining
+}
+
+/// Words in the guess pool that satisfy the full turn history but are not in the
+/// bundled NYT answer list. Useful when feedback is consistent but `answers.txt`
+/// is missing a word NYT accepted as a solution.
+pub fn guess_pool_only_matches(
+    word_lists: &WordLists,
+    history: &[(Word, Pattern)],
+) -> Vec<Word> {
+    if !filter_by_history(&word_lists.answers, history).is_empty() {
+        return Vec::new();
+    }
+    filter_by_history(&word_lists.guess_pool, history)
+        .into_iter()
+        .filter(|&word| !word_lists.is_answer(word))
+        .collect()
 }
 
 #[cfg(test)]
@@ -82,5 +99,20 @@ mod tests {
         let history = vec![(off_list, compute_feedback(off_list, answer))];
         let remaining = filter_by_history(&lists.answers, &history);
         assert!(remaining.contains(&answer));
+    }
+
+    #[test]
+    fn emoji_matches_history_in_answer_list() {
+        let lists = WordLists::load();
+        let history = vec![
+            (w("slate"), pat("xxxxY")),
+            (w("diner"), pat("xYxYx")),
+            (w("weigh"), pat("xYYxx")),
+            (w("equip"), pat("GxxYx")),
+        ];
+        assert!(lists.is_answer(w("emoji")));
+        let remaining = filter_by_history(&lists.answers, &history);
+        assert_eq!(remaining, vec![w("emoji")]);
+        assert!(guess_pool_only_matches(&lists, &history).is_empty());
     }
 }
