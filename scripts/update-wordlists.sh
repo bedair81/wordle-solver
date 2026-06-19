@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Refresh NYT Wordle word lists from community-maintained sources.
 #
+# answers.txt merges:
+#   - fredoverflow/wordle NYT answer pool (~2,309 canonical solution words)
+#   - eithan/wordlelist past answers + today/yesterday (NYT API, daily updates)
+#
 # Usage:
 #   ./scripts/update-wordlists.sh          # download, validate, run tests
 #   ./scripts/update-wordlists.sh --dry-run  # download to temp files and report diff only
@@ -11,7 +15,8 @@ DATA="$ROOT/data"
 ANSWERS="$DATA/answers.txt"
 GUESSES="$DATA/allowed_guesses.txt"
 
-ANSWERS_URL="https://raw.githubusercontent.com/fredoverflow/wordle/master/wordle-nyt-answers-alphabetical.txt"
+ANSWERS_BASE_URL="https://raw.githubusercontent.com/fredoverflow/wordle/master/wordle-nyt-answers-alphabetical.txt"
+WORDLELIST_BASE="https://raw.githubusercontent.com/eithan/wordlelist/main"
 GUESSES_URL="https://gist.githubusercontent.com/kcwhite/bb598f1b3017b5477cb818c9b086a5d9/raw/wordle_possibles.txt"
 
 DRY_RUN=0
@@ -66,11 +71,42 @@ download() {
   fi
 }
 
+# Emit lowercase five-letter words from a line-based file or a single-word file.
+emit_words() {
+  local file="$1"
+  if [[ ! -s "$file" ]]; then
+    return 0
+  fi
+  if grep -q $'\n' "$file"; then
+    tr '[:upper:]' '[:lower:]' < "$file" | grep -E '^[a-z]{5}$'
+  else
+    local word
+    word="$(tr '[:upper:]' '[:lower:]' < "$file")"
+    if [[ "$word" =~ ^[a-z]{5}$ ]]; then
+      printf '%s\n' "$word"
+    fi
+  fi
+}
+
+merge_answers() {
+  {
+    emit_words "$TMP/answers_base.txt"
+    emit_words "$TMP/wl_words.txt"
+    emit_words "$TMP/wl_current.txt"
+    emit_words "$TMP/wl_prior.txt"
+  } | sort -u
+}
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-download "$ANSWERS_URL" "$TMP/answers.txt"
+download "$ANSWERS_BASE_URL" "$TMP/answers_base.txt"
+download "$WORDLELIST_BASE/words.txt" "$TMP/wl_words.txt"
+download "$WORDLELIST_BASE/current.txt" "$TMP/wl_current.txt"
+download "$WORDLELIST_BASE/prior.txt" "$TMP/wl_prior.txt"
 download "$GUESSES_URL" "$TMP/allowed_guesses.txt"
+
+merge_answers > "$TMP/answers.txt"
 
 validate_file "$TMP/answers.txt" "answers"
 validate_file "$TMP/allowed_guesses.txt" "allowed_guesses"

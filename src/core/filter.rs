@@ -102,7 +102,7 @@ mod tests {
     }
 
     #[test]
-    fn emoji_matches_history_but_not_answer_list() {
+    fn emoji_matches_history_in_answer_list() {
         let lists = WordLists::load();
         let history = vec![
             (w("slate"), pat("xxxxY")),
@@ -110,9 +110,9 @@ mod tests {
             (w("weigh"), pat("xYYxx")),
             (w("equip"), pat("GxxYx")),
         ];
-        assert!(filter_by_history(&lists.answers, &history).is_empty());
-        let pool_only = guess_pool_only_matches(&lists, &history);
-        assert_eq!(pool_only, vec![w("emoji")]);
-        assert!(!lists.is_answer(w("emoji")));
+        assert!(lists.is_answer(w("emoji")));
+        let remaining = filter_by_history(&lists.answers, &history);
+        assert_eq!(remaining, vec![w("emoji")]);
+        assert!(guess_pool_only_matches(&lists, &history).is_empty());
     }
 }
