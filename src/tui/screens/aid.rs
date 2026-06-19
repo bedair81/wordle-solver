@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 use wordle_solver::core::feedback::compute_feedback;
+use wordle_solver::core::filter::guess_pool_only_matches;
 use wordle_solver::core::game::{GameError, GameState};
 use wordle_solver::core::hard_mode::{
     assemble_guess, editable_slot_count, known_green_letters, prefill_feedback_tiles,
@@ -336,6 +337,23 @@ fn empty_candidate_warning(game: &GameState, guess: Word, pattern: Pattern) -> O
         return None;
     }
 
+    let pool_only = guess_pool_only_matches(&game.word_lists, game.history());
+    if !pool_only.is_empty() {
+        let sample: Vec<_> = pool_only.iter().take(5).map(|w| w.to_string()).collect();
+        let extra = if pool_only.len() > sample.len() {
+            format!(" (+{} more)", pool_only.len() - sample.len())
+        } else {
+            String::new()
+        };
+        return Some(format!(
+            "No candidates in our answer list, but these guess-pool words match your history: \
+             {}{}. NYT may use a word missing from answers.txt — try one of these, or run \
+             scripts/update-wordlists.sh.",
+            sample.join(", "),
+            extra
+        ));
+    }
+
     let matches_any_answer = game
         .word_lists
         .answers
@@ -505,9 +523,18 @@ fn render_candidates(frame: &mut Frame, state: &PlayState, area: ratatui::layout
     let title = format!("Candidates ({})", remaining.len());
 
     if remaining.is_empty() && !state.game.is_solved() {
-        let message = state.constraint_warning.as_deref().unwrap_or(
-            "No candidates match these constraints — check feedback or update word lists.",
-        );
+        let pool_only = guess_pool_only_matches(&state.game.word_lists, state.game.history());
+        let message = if let Some(warning) = state.constraint_warning.as_deref() {
+            warning.to_string()
+        } else if !pool_only.is_empty() {
+            let words: Vec<_> = pool_only.iter().take(8).map(|w| w.to_string()).collect();
+            format!(
+                "No NYT answer-list matches. Guess-pool matches: {}.",
+                words.join(", ")
+            )
+        } else {
+            "No candidates match these constraints — check feedback or update word lists.".into()
+        };
         let block = Paragraph::new(message)
             .wrap(Wrap { trim: true })
             .style(theme::error_style())
