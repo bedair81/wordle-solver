@@ -85,7 +85,7 @@ fn main() {
         samples.push((format!("FULL UI turn-2 max: {max_label}"), max_d));
     }
 
-    samples.sort_by(|a, b| b.1.cmp(&a.1));
+    samples.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     let profile = if cfg!(debug_assertions) {
         "debug"

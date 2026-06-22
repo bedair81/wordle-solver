@@ -308,8 +308,7 @@ fn try_heuristic_pick(ctx: &SolverContext<'_>) -> Option<Word> {
     // Tight turns: prefer guesses that minimize the largest feedback bucket.
     if ctx.turns_left.is_some_and(|left| {
         remaining_len > left.saturating_add(1)
-            && remaining_len >= 4
-            && remaining_len <= ENDGAME_PROBE_MAX_REMAINING
+            && (4..=ENDGAME_PROBE_MAX_REMAINING).contains(&remaining_len)
             && (remaining_len > left || ctx.suffix_cluster)
     }) {
         return best_minimax_compliant_pick(ctx, false);

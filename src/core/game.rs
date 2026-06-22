@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::core::filter::{filter_by_history, filter_candidates};
+use crate::core::filter::{filter_by_history, filter_candidates_in_place};
 use crate::core::hard_mode::satisfies_hard_mode;
 use crate::core::pattern::Pattern;
 use crate::core::solver::Suggestion;
@@ -92,8 +92,7 @@ impl GameState {
 
         self.turns.push(Turn { guess, pattern });
         self.history.push((guess, pattern));
-        self.remaining_answers =
-            filter_candidates(&self.remaining_answers, guess, pattern);
+        filter_candidates_in_place(&mut self.remaining_answers, guess, pattern);
         Ok(())
     }
 

@@ -32,6 +32,7 @@ pub struct CandidateBuffer {
     pub early_game_pool: Vec<Word>,
     /// Early-game 1-ply scores keyed by word (from prepool ranking).
     pub precomputed_one_ply: HashMap<Word, GuessScore>,
+    tried: HashSet<Word>,
     seen: HashSet<Word>,
 }
 
@@ -42,13 +43,15 @@ impl CandidateBuffer {
             small_remaining: Vec::new(),
             early_game_pool: Vec::new(),
             precomputed_one_ply: HashMap::new(),
+            tried: HashSet::new(),
             seen: HashSet::new(),
         }
     }
 }
 
-fn tried_guesses(history: &[(Word, Pattern)]) -> HashSet<Word> {
-    history.iter().map(|(g, _)| *g).collect()
+fn fill_tried(scratch: &mut CandidateBuffer, history: &[(Word, Pattern)]) {
+    scratch.tried.clear();
+    scratch.tried.extend(history.iter().map(|(g, _)| *g));
 }
 
 fn exclude_prior_guesses(words: &mut Vec<Word>, tried: &HashSet<Word>) {
@@ -135,10 +138,15 @@ fn build_guess_pool<'a>(
         return &[];
     }
 
-    let tried = tried_guesses(history);
+    fill_tried(scratch, history);
 
     if remaining.len() <= 2 {
-        compliant_remaining_subset(remaining, history, &tried, &mut scratch.small_remaining);
+        compliant_remaining_subset(
+            remaining,
+            history,
+            &scratch.tried,
+            &mut scratch.small_remaining,
+        );
         return &scratch.small_remaining;
     }
 
@@ -147,7 +155,12 @@ fn build_guess_pool<'a>(
         if should_use_remaining_only(remaining.len(), left)
             && !(suffix_cluster && remaining.len() > left)
         {
-            compliant_remaining_subset(remaining, history, &tried, &mut scratch.small_remaining);
+            compliant_remaining_subset(
+                remaining,
+                history,
+                &scratch.tried,
+                &mut scratch.small_remaining,
+            );
             return &scratch.small_remaining;
         }
     }
@@ -155,7 +168,7 @@ fn build_guess_pool<'a>(
     fill_compliant_pool(scratch, word_lists, history);
 
     if turns_left.is_some_and(|left| shares_fixed_suffix(remaining) && remaining.len() > left) {
-        exclude_prior_guesses(&mut scratch.compliant_pool, &tried);
+        exclude_prior_guesses(&mut scratch.compliant_pool, &scratch.tried);
         return &scratch.compliant_pool;
     }
 
@@ -216,12 +229,12 @@ fn build_guess_pool<'a>(
             remaining,
             &mut scratch.seen,
         );
-        exclude_prior_guesses(&mut scratch.early_game_pool, &tried);
+        exclude_prior_guesses(&mut scratch.early_game_pool, &scratch.tried);
         return &scratch.early_game_pool;
     }
 
     union_unique(&mut scratch.compliant_pool, remaining, &mut scratch.seen);
-    exclude_prior_guesses(&mut scratch.compliant_pool, &tried);
+    exclude_prior_guesses(&mut scratch.compliant_pool, &scratch.tried);
     &scratch.compliant_pool
 }
 

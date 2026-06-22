@@ -188,6 +188,7 @@ struct TwoPlyScratch {
     followup_buffer: CandidateBuffer,
     partitions: [Vec<Word>; PATTERN_BUCKETS],
     subset_set: HashSet<Word>,
+    extended_history: Vec<(Word, Pattern)>,
 }
 
 impl TwoPlyScratch {
@@ -196,6 +197,7 @@ impl TwoPlyScratch {
             followup_buffer: CandidateBuffer::new(),
             partitions: std::array::from_fn(|_| Vec::new()),
             subset_set: HashSet::new(),
+            extended_history: Vec::new(),
         }
     }
 
@@ -295,13 +297,13 @@ fn score_two_ply_with_scratch(
             scratch.subset_set.clear();
             scratch.subset_set.extend(subset.iter().copied());
             let pattern = compute_feedback(score.word, subset[0]);
-            let mut extended = Vec::with_capacity(history.len() + 1);
-            extended.extend_from_slice(history);
-            extended.push((score.word, pattern));
+            scratch.extended_history.clear();
+            scratch.extended_history.extend_from_slice(history);
+            scratch.extended_history.push((score.word, pattern));
             let pool = followup_guess_pool(
                 word_lists,
                 subset,
-                &extended,
+                &scratch.extended_history,
                 followup_turns,
                 &mut scratch.followup_buffer,
             );

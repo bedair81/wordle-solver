@@ -1,7 +1,18 @@
+use std::cell::RefCell;
+
 use crate::core::feedback::compute_feedback;
 use crate::core::pattern::Pattern;
 use crate::core::word::Word;
 use crate::core::words::WordLists;
+
+thread_local! {
+    static FILTER_SCRATCH: RefCell<Vec<Word>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Filter `candidates` in place without allocating a new vector.
+pub fn filter_candidates_in_place(candidates: &mut Vec<Word>, guess: Word, pattern: Pattern) {
+    candidates.retain(|&candidate| compute_feedback(guess, candidate) == pattern);
+}
 
 pub fn filter_candidates(candidates: &[Word], guess: Word, pattern: Pattern) -> Vec<Word> {
     candidates
@@ -12,11 +23,19 @@ pub fn filter_candidates(candidates: &[Word], guess: Word, pattern: Pattern) -> 
 }
 
 pub fn filter_by_history(candidates: &[Word], history: &[(Word, Pattern)]) -> Vec<Word> {
-    let mut remaining = candidates.to_vec();
-    for &(guess, pattern) in history {
-        remaining = filter_candidates(&remaining, guess, pattern);
+    if history.is_empty() {
+        return candidates.to_vec();
     }
-    remaining
+
+    FILTER_SCRATCH.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        scratch.clear();
+        scratch.extend_from_slice(candidates);
+        for &(guess, pattern) in history {
+            filter_candidates_in_place(&mut scratch, guess, pattern);
+        }
+        scratch.clone()
+    })
 }
 
 /// Words in the guess pool that satisfy the full turn history but are not in the
@@ -66,6 +85,21 @@ mod tests {
             let s = w.as_str();
             s.as_bytes()[2] == b'a' && s.as_bytes()[3] == b't' && s.as_bytes()[4] == b'e'
         }));
+    }
+
+    #[test]
+    fn filter_in_place_matches_collect() {
+        let lists = WordLists::load();
+        let history = vec![
+            (w("slate"), pat("xxGGG")),
+            (w("crate"), pat("xGxxx")),
+        ];
+        let expected = filter_by_history(&lists.answers, &history);
+        let mut in_place = lists.answers.clone();
+        for &(guess, pattern) in &history {
+            filter_candidates_in_place(&mut in_place, guess, pattern);
+        }
+        assert_eq!(in_place, expected);
     }
 
     #[test]
