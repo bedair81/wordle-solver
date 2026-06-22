@@ -34,7 +34,7 @@ pub fn filter_by_history(candidates: &[Word], history: &[(Word, Pattern)]) -> Ve
         for &(guess, pattern) in history {
             filter_candidates_in_place(&mut scratch, guess, pattern);
         }
-        scratch.clone()
+        std::mem::take(&mut *scratch)
     })
 }
 
@@ -87,6 +87,14 @@ mod tests {
         }));
     }
 
+    fn filter_via_collect_chain(candidates: &[Word], history: &[(Word, Pattern)]) -> Vec<Word> {
+        let mut remaining = candidates.to_vec();
+        for &(guess, pattern) in history {
+            remaining = filter_candidates(&remaining, guess, pattern);
+        }
+        remaining
+    }
+
     #[test]
     fn filter_in_place_matches_collect() {
         let lists = WordLists::load();
@@ -94,12 +102,24 @@ mod tests {
             (w("slate"), pat("xxGGG")),
             (w("crate"), pat("xGxxx")),
         ];
-        let expected = filter_by_history(&lists.answers, &history);
+        let expected = filter_via_collect_chain(&lists.answers, &history);
         let mut in_place = lists.answers.clone();
         for &(guess, pattern) in &history {
             filter_candidates_in_place(&mut in_place, guess, pattern);
         }
         assert_eq!(in_place, expected);
+    }
+
+    #[test]
+    fn filter_by_history_matches_collect_chain() {
+        let lists = WordLists::load();
+        let history = vec![
+            (w("slate"), pat("xxGGG")),
+            (w("crate"), pat("xGxxx")),
+        ];
+        let via_history = filter_by_history(&lists.answers, &history);
+        let via_collect = filter_via_collect_chain(&lists.answers, &history);
+        assert_eq!(via_history, via_collect);
     }
 
     #[test]
