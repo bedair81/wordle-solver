@@ -1,9 +1,12 @@
+pub mod cache;
+pub mod config;
 pub mod feedback;
 pub mod filter;
 pub mod game;
 pub mod hard_mode;
 pub mod pattern;
 pub mod patterns;
+pub mod session;
 pub mod solver;
 pub mod word;
 pub mod words;

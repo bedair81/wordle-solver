@@ -87,4 +87,30 @@ mod tests {
         let fb = compute_feedback(guess, answer);
         assert_eq!(fb, pat("xxGGG"));
     }
+
+    /// Property-style: feedback is always length-5 tiles; win only when guess == answer.
+    #[test]
+    fn feedback_properties_on_sample_pairs() {
+        let words = [
+            "slate", "crane", "audio", "eerie", "speed", "robot", "brood", "alloy", "hello",
+            "aback", "zesty", "mummy", "vivid", "level",
+        ];
+        for &g in &words {
+            for &a in &words {
+                let guess = w(g);
+                let answer = w(a);
+                let fb = compute_feedback(guess, answer);
+                assert_eq!(fb.tiles.len(), 5);
+                assert_eq!(fb.is_win(), g == a);
+                // Greens only where letters match positions.
+                for i in 0..5 {
+                    if guess.0[i] == answer.0[i] {
+                        assert_eq!(fb.tiles[i], Tile::Correct);
+                    } else {
+                        assert_ne!(fb.tiles[i], Tile::Correct);
+                    }
+                }
+            }
+        }
+    }
 }

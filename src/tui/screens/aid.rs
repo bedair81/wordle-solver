@@ -1,4 +1,4 @@
-use std::sync::Arc;
+//! Solver Aid / shared play rendering (state lives in `play_state`).
 
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
@@ -7,372 +7,11 @@ use ratatui::{
     Frame,
 };
 
-use wordle_solver::core::feedback::compute_feedback;
 use wordle_solver::core::filter::guess_pool_only_matches;
-use wordle_solver::core::game::{GameError, GameState};
-use wordle_solver::core::hard_mode::{
-    assemble_guess, editable_slot_count, known_green_letters, prefill_feedback_tiles,
-    satisfies_hard_mode,
-};
-use wordle_solver::core::pattern::{Pattern, Tile};
-use wordle_solver::core::solver::Suggestion;
-use wordle_solver::core::word::Word;
-use wordle_solver::core::words::WordLists;
 
-use crate::tui::input::Action;
+use crate::tui::screens::play_state::{InputPhase, PlayState};
 use crate::tui::theme;
 use crate::tui::widgets::TileRow;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InputPhase {
-    TypingGuess,
-    SettingFeedback,
-}
-
-pub struct PlayState {
-    pub game: GameState,
-    pub copilot: bool,
-    pub phase: InputPhase,
-    pub guess_buffer: String,
-    pub feedback_tiles: [Option<Tile>; 5],
-    pub feedback_cursor: usize,
-    pub error: Option<String>,
-    pub list_scroll: usize,
-    pub show_help: bool,
-    pub title: &'static str,
-    cached_suggestion: Option<Suggestion>,
-    constraint_warning: Option<String>,
-    fixed_letters: [Option<u8>; 5],
-    pending_guess: Option<Word>,
-}
-
-impl PlayState {
-    pub fn new(word_lists: Arc<WordLists>, copilot: bool, title: &'static str) -> Self {
-        let mut state = Self {
-            game: GameState::new(word_lists),
-            copilot,
-            phase: if copilot {
-                InputPhase::SettingFeedback
-            } else {
-                InputPhase::TypingGuess
-            },
-            guess_buffer: String::new(),
-            feedback_tiles: [None; 5],
-            feedback_cursor: 0,
-            error: None,
-            list_scroll: 0,
-            show_help: false,
-            title,
-            cached_suggestion: None,
-            constraint_warning: None,
-            fixed_letters: [None; 5],
-            pending_guess: None,
-        };
-        state.refresh_suggestion();
-        if state.copilot {
-            state.sync_copilot_guess();
-        } else {
-            state.begin_typing_phase();
-        }
-        state
-    }
-
-    fn refresh_suggestion(&mut self) {
-        self.cached_suggestion = self.game.suggest_next();
-    }
-
-    fn sync_copilot_guess(&mut self) {
-        let Some(word) = self.cached_suggestion.as_ref().map(|s| s.word) else {
-            self.guess_buffer.clear();
-            self.pending_guess = None;
-            self.feedback_tiles = [None; 5];
-            self.feedback_cursor = 0;
-            self.error = Some(
-                "No NYT hard-mode-compliant guess available — check turn history or remaining candidates."
-                    .into(),
-            );
-            return;
-        };
-        self.guess_buffer = word.as_str().to_string();
-        if !self.begin_feedback_phase(word) {
-            self.error = Some(
-                "Solver could not suggest a NYT hard-mode-compliant guess — check turn history."
-                    .into(),
-            );
-        }
-    }
-
-    fn turn_history(&self) -> Vec<(Word, Pattern)> {
-        self.game
-            .turns
-            .iter()
-            .map(|t| (t.guess, t.pattern))
-            .collect()
-    }
-
-    fn begin_typing_phase(&mut self) {
-        self.fixed_letters = known_green_letters(&self.turn_history());
-        self.guess_buffer.clear();
-        self.pending_guess = None;
-        self.feedback_tiles = [None; 5];
-        self.feedback_cursor = 0;
-        self.phase = InputPhase::TypingGuess;
-    }
-
-    fn begin_feedback_phase(&mut self, guess: Word) -> bool {
-        let history = self.turn_history();
-        if !satisfies_hard_mode(guess, &history) {
-            self.error = Some(GameError::HardModeViolation.to_string());
-            return false;
-        }
-        self.error = None;
-        self.pending_guess = Some(guess);
-        let (tiles, cursor) = prefill_feedback_tiles(&history, guess);
-        self.feedback_tiles = tiles;
-        self.feedback_cursor = cursor;
-        self.phase = InputPhase::SettingFeedback;
-        true
-    }
-
-    fn is_feedback_locked(&self, index: usize) -> bool {
-        self.feedback_tiles[index] == Some(Tile::Correct)
-    }
-
-    fn move_feedback_cursor(&mut self, delta: i32) {
-        let mut i = self.feedback_cursor as i32;
-        for _ in 0..5 {
-            i = (i + delta).clamp(0, 4);
-            if !self.is_feedback_locked(i as usize) {
-                self.feedback_cursor = i as usize;
-                return;
-            }
-        }
-    }
-
-    pub fn cached_suggestion(&self) -> Option<&Suggestion> {
-        self.cached_suggestion.as_ref()
-    }
-
-    fn active_guess(&self) -> Option<Word> {
-        if self.copilot {
-            self.cached_suggestion.as_ref().map(|s| s.word)
-        } else if let Some(guess) = self.pending_guess {
-            Some(guess)
-        } else {
-            assemble_guess(&self.fixed_letters, &self.guess_buffer)
-        }
-    }
-
-    fn editable_slots(&self) -> usize {
-        editable_slot_count(&self.fixed_letters)
-    }
-
-    fn prepare_copilot_feedback(&mut self) {
-        self.sync_copilot_guess();
-    }
-
-    pub fn handle(&mut self, action: Action) -> bool {
-        match action {
-            Action::Quit => return true,
-            Action::Back => return true,
-            Action::Help => {
-                self.show_help = !self.show_help;
-            }
-            Action::Undo => {
-                if self.game.undo_turn() {
-                    self.error = None;
-                    self.constraint_warning = None;
-                    self.refresh_suggestion();
-                    if self.copilot {
-                        self.prepare_copilot_feedback();
-                    } else {
-                        self.begin_typing_phase();
-                    }
-                }
-            }
-            Action::Reset => {
-                self.game.reset();
-                self.error = None;
-                self.constraint_warning = None;
-                self.list_scroll = 0;
-                self.refresh_suggestion();
-                if self.copilot {
-                    self.phase = InputPhase::SettingFeedback;
-                    self.prepare_copilot_feedback();
-                } else {
-                    self.begin_typing_phase();
-                }
-            }
-            Action::Up => {
-                if self.list_scroll > 0 {
-                    self.list_scroll -= 1;
-                }
-            }
-            Action::Down => {
-                let max = self.game.remaining_count().saturating_sub(1);
-                if self.list_scroll < max {
-                    self.list_scroll += 1;
-                }
-            }
-            Action::Char(c) if self.phase == InputPhase::TypingGuess && !self.copilot => {
-                if self.guess_buffer.len() < self.editable_slots() {
-                    self.guess_buffer.push(c);
-                    self.error = None;
-                }
-            }
-            Action::Delete if self.phase == InputPhase::TypingGuess && !self.copilot => {
-                self.guess_buffer.pop();
-                self.error = None;
-            }
-            Action::Submit => {
-                self.on_submit();
-            }
-            Action::SetTileCorrect if self.phase == InputPhase::SettingFeedback => {
-                if !self.is_feedback_locked(self.feedback_cursor) {
-                    self.feedback_tiles[self.feedback_cursor] = Some(Tile::Correct);
-                }
-            }
-            Action::SetTilePresent if self.phase == InputPhase::SettingFeedback => {
-                if !self.is_feedback_locked(self.feedback_cursor) {
-                    self.feedback_tiles[self.feedback_cursor] = Some(Tile::Present);
-                }
-            }
-            Action::SetTileAbsent if self.phase == InputPhase::SettingFeedback => {
-                if !self.is_feedback_locked(self.feedback_cursor) {
-                    self.feedback_tiles[self.feedback_cursor] = Some(Tile::Absent);
-                }
-            }
-            Action::CycleTile if self.phase == InputPhase::SettingFeedback => {
-                if !self.is_feedback_locked(self.feedback_cursor) {
-                    let cur = self.feedback_tiles[self.feedback_cursor]
-                        .unwrap_or(Tile::Absent)
-                        .cycle();
-                    self.feedback_tiles[self.feedback_cursor] = Some(cur);
-                }
-            }
-            Action::TileLeft if self.phase == InputPhase::SettingFeedback => {
-                self.move_feedback_cursor(-1);
-            }
-            Action::TileRight if self.phase == InputPhase::SettingFeedback => {
-                self.move_feedback_cursor(1);
-            }
-            _ => {}
-        }
-        false
-    }
-
-    fn on_submit(&mut self) {
-        match self.phase {
-            InputPhase::TypingGuess => {
-                let needed = self.editable_slots();
-                if self.guess_buffer.len() != needed {
-                    self.error = Some(format!(
-                        "Enter {} letter{} for the remaining tiles",
-                        needed,
-                        if needed == 1 { "" } else { "s" }
-                    ));
-                    return;
-                }
-                let Some(word) = assemble_guess(&self.fixed_letters, &self.guess_buffer) else {
-                    self.error = Some("Invalid word".into());
-                    return;
-                };
-                self.constraint_warning = if !self.game.word_lists.is_valid_guess(word) {
-                    Some(format!(
-                        "'{word}' is not in our guess list — OK for NYT words we may be missing."
-                    ))
-                } else {
-                    None
-                };
-                #[allow(clippy::needless_return)]
-                if !self.begin_feedback_phase(word) {
-                    return;
-                }
-            }
-            InputPhase::SettingFeedback => {
-                if self.feedback_tiles.iter().any(|t| t.is_none()) {
-                    self.error = Some("Set feedback for all 5 tiles (g/y/x or Space)".into());
-                    return;
-                }
-                let Some(guess) = self.active_guess() else {
-                    self.error = Some("No active guess".into());
-                    return;
-                };
-                let tiles: [Tile; 5] = self.feedback_tiles.map(|t| t.unwrap());
-                let pattern = Pattern::new(tiles);
-
-                let apply = if self.copilot {
-                    self.game.apply_turn(guess, pattern)
-                } else {
-                    self.game.record_turn(guess, pattern)
-                };
-
-                match apply {
-                    Ok(()) => {
-                        self.error = None;
-                        self.constraint_warning =
-                            empty_candidate_warning(&self.game, guess, pattern);
-                        self.guess_buffer.clear();
-                        self.feedback_tiles = [None; 5];
-                        self.feedback_cursor = 0;
-                        self.refresh_suggestion();
-
-                        if self.game.is_solved() || self.game.is_lost() {
-                            self.begin_typing_phase();
-                        } else if self.copilot {
-                            self.prepare_copilot_feedback();
-                        } else {
-                            self.begin_typing_phase();
-                        }
-                    }
-                    Err(e) => self.error = Some(e.to_string()),
-                }
-            }
-        }
-    }
-}
-
-fn empty_candidate_warning(game: &GameState, guess: Word, pattern: Pattern) -> Option<String> {
-    if game.is_solved() || game.remaining_count() > 0 {
-        return None;
-    }
-
-    let pool_only = guess_pool_only_matches(&game.word_lists, game.history());
-    if !pool_only.is_empty() {
-        let sample: Vec<_> = pool_only.iter().take(5).map(|w| w.to_string()).collect();
-        let extra = if pool_only.len() > sample.len() {
-            format!(" (+{} more)", pool_only.len() - sample.len())
-        } else {
-            String::new()
-        };
-        return Some(format!(
-            "No candidates in our answer list, but these guess-pool words match your history: \
-             {}{}. NYT may use a word missing from answers.txt — try one of these, or run \
-             scripts/update-wordlists.sh.",
-            sample.join(", "),
-            extra
-        ));
-    }
-
-    let matches_any_answer = game
-        .word_lists
-        .answers
-        .iter()
-        .any(|&answer| compute_feedback(guess, answer) == pattern);
-
-    if !matches_any_answer {
-        return Some(format!(
-            "No candidates — this feedback matches no word in our answer list ({guess}). \
-             Check tile colors, or run scripts/update-wordlists.sh if today's NYT answer is missing."
-        ));
-    }
-
-    Some(
-        "No candidates — this feedback contradicts earlier turns. \
-         Double-check tile colors (duplicate letters are easy to mis-enter)."
-            .into(),
-    )
-}
 
 pub fn render(frame: &mut Frame, state: &mut PlayState) {
     let area = frame.area();
@@ -392,7 +31,13 @@ pub fn render(frame: &mut Frame, state: &mut PlayState) {
         ])
         .split(area);
 
-    let header = Paragraph::new(state.title)
+    let mode_tag = if state.game.easy_mode() {
+        " [easy]"
+    } else {
+        " [hard]"
+    };
+    let cb_tag = if state.colorblind { " [CB]" } else { "" };
+    let header = Paragraph::new(format!("{}{}{}", state.title, mode_tag, cb_tag))
         .style(theme::title_style())
         .alignment(Alignment::Center)
         .block(
@@ -454,6 +99,7 @@ fn render_history(frame: &mut Frame, state: &PlayState, area: ratatui::layout::R
                 fixed_letters: None,
                 feedback_draft: None,
                 feedback_cursor: None,
+                colorblind: state.colorblind,
             },
             row_area,
         );
@@ -484,7 +130,19 @@ fn render_stats(frame: &mut Frame, state: &PlayState, area: ratatui::layout::Rec
         ]),
     ];
 
-    if let Some(s) = suggestion {
+    if state.thinking {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Suggested: computing…",
+            theme::highlight_style(),
+        )));
+        if let Some(s) = suggestion {
+            lines.push(Line::from(Span::styled(
+                format!("  (previous: {})", s.word),
+                theme::muted_style(),
+            )));
+        }
+    } else if let Some(s) = suggestion {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("Suggested: ", theme::muted_style()),
@@ -523,8 +181,9 @@ fn render_candidates(frame: &mut Frame, state: &PlayState, area: ratatui::layout
     let title = format!("Candidates ({})", remaining.len());
 
     if remaining.is_empty() && !state.game.is_solved() {
-        let pool_only = guess_pool_only_matches(&state.game.word_lists, state.game.history());
-        let message = if let Some(warning) = state.constraint_warning.as_deref() {
+        let history = state.game.history();
+        let pool_only = guess_pool_only_matches(&state.game.word_lists, &history);
+        let message = if let Some(warning) = state.constraint_warning() {
             warning.to_string()
         } else if !pool_only.is_empty() {
             let words: Vec<_> = pool_only.iter().take(8).map(|w| w.to_string()).collect();
@@ -590,14 +249,20 @@ fn render_input(frame: &mut Frame, state: &PlayState, area: ratatui::layout::Rec
     } else {
         match state.phase {
             InputPhase::TypingGuess => {
-                if state.fixed_letters.iter().any(|slot| slot.is_some()) {
+                if state.fixed_letters().iter().any(|slot| slot.is_some()) {
                     lines.push(Line::from(
                         "NYT hard mode: green tiles locked — type remaining letters (include yellows from prior turns):",
                     ));
                 } else if !state.game.turns.is_empty() {
-                    lines.push(Line::from(
-                        "NYT hard mode: include all yellow letters from prior turns, then Enter for feedback:",
-                    ));
+                    if state.game.easy_mode() {
+                        lines.push(Line::from(
+                            "Easy mode: type any guess, then Enter for feedback:",
+                        ));
+                    } else {
+                        lines.push(Line::from(
+                            "NYT hard mode: include all yellow letters from prior turns, then Enter for feedback:",
+                        ));
+                    }
                 } else {
                     lines.push(Line::from(
                         "Type your guess, then Enter to set NYT feedback:",
@@ -605,13 +270,18 @@ fn render_input(frame: &mut Frame, state: &PlayState, area: ratatui::layout::Rec
                 }
             }
             InputPhase::SettingFeedback => {
-                if state.copilot {
+                if state.thinking && state.copilot {
+                    lines.push(Line::from(Span::styled(
+                        "Computing next suggestion… (Esc/q still work)",
+                        theme::highlight_style(),
+                    )));
+                } else if state.copilot {
                     lines.push(Line::from(
                         "Play the suggested word on NYT, then set tile colors (g/y/x):",
                     ));
                 } else {
                     lines.push(Line::from(
-                        "Set each tile to match NYT (g=green y=yellow x=gray), Enter to commit:",
+                        "Set each tile to match NYT (g/y/x or Space), Enter to commit:",
                     ));
                 }
             }
@@ -633,22 +303,25 @@ fn render_input(frame: &mut Frame, state: &PlayState, area: ratatui::layout::Rec
                     fixed_letters: None,
                     feedback_draft: Some(state.feedback_tiles),
                     feedback_cursor: Some(state.feedback_cursor),
+                    colorblind: state.colorblind,
                 },
                 row_area,
             );
         } else {
+            let fixed = state.fixed_letters();
             frame.render_widget(
                 TileRow {
                     word: None,
                     pattern: None,
                     buffer: Some(&state.guess_buffer),
-                    fixed_letters: if state.fixed_letters.iter().any(|s| s.is_some()) {
-                        Some(state.fixed_letters)
+                    fixed_letters: if fixed.iter().any(|s| s.is_some()) {
+                        Some(fixed)
                     } else {
                         None
                     },
                     feedback_draft: None,
                     feedback_cursor: None,
+                    colorblind: state.colorblind,
                 },
                 row_area,
             );
@@ -668,45 +341,6 @@ fn render_input(frame: &mut Frame, state: &PlayState, area: ratatui::layout::Rec
     frame.render_widget(block, area);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-
-    #[test]
-    fn begin_feedback_phase_rejects_hard_mode_violation() {
-        let lists = Arc::new(WordLists::load());
-        let mut state = PlayState::new(lists, false, "Solver Aid");
-        state
-            .game
-            .record_turn(
-                Word::parse("slate").unwrap(),
-                Pattern::from_str("Gxxxx").unwrap(),
-            )
-            .unwrap();
-        let bad = Word::parse("plate").unwrap();
-        assert!(!state.begin_feedback_phase(bad));
-        assert!(state.error.is_some());
-    }
-
-    #[test]
-    fn solver_aid_shows_opening_suggestion_before_first_turn() {
-        let lists = Arc::new(WordLists::load());
-        let state = PlayState::new(lists, false, "Solver Aid");
-        assert!(state.cached_suggestion().is_some());
-        assert_eq!(state.phase, InputPhase::TypingGuess);
-    }
-
-    #[test]
-    fn copilot_starts_with_cached_opening_suggestion() {
-        let lists = Arc::new(WordLists::load());
-        let state = PlayState::new(lists, true, "Copilot");
-        assert!(state.cached_suggestion().is_some());
-        assert!(state.active_guess().is_some());
-        assert_eq!(state.phase, InputPhase::SettingFeedback);
-    }
-}
-
 fn footer_text(state: &PlayState) -> String {
     if state.show_help {
         let undo_reset = if state.phase == InputPhase::TypingGuess {
@@ -715,16 +349,45 @@ fn footer_text(state: &PlayState) -> String {
             "u undo | r reset | "
         };
         return format!(
-            "NYT hard mode: locked greens, required yellows. g/y/x or Space tiles | ←/→ cursor | Enter commit | {undo_reset}Esc back | q quit"
+            "Mode: {} | c colorblind tiles | g/y/x or Space | ←/→ | Enter | {undo_reset}Esc back | q quit",
+            if state.game.easy_mode() {
+                "easy"
+            } else {
+                "hard"
+            }
         );
+    }
+    if state.thinking {
+        return "Computing suggestion… | Esc back | q quit | ? help".into();
     }
     if state.game.is_solved() || state.game.is_lost() {
         return "u undo | r reset | Esc back | q quit | ? help".into();
     }
     match state.phase {
-        InputPhase::TypingGuess => "Type guess | Enter next | ↑/↓ scroll | ? help".into(),
-        InputPhase::SettingFeedback => {
-            "g/y/x tiles | Enter commit | ←/→ cursor | u undo | r reset | ? help".into()
+        InputPhase::TypingGuess => {
+            "Type guess | Enter next | ↑/↓ scroll | c colorblind | ? help".into()
         }
+        InputPhase::SettingFeedback => {
+            "g/y/x tiles | Enter commit | ←/→ | u undo | r reset | c colorblind | ? help".into()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use wordle_solver::core::pattern::Tile;
+
+    use crate::tui::theme::colorblind_mark;
+
+    #[test]
+    fn colorblind_symbols_distinct() {
+        assert_ne!(
+            colorblind_mark(Tile::Correct),
+            colorblind_mark(Tile::Present)
+        );
+        assert_ne!(
+            colorblind_mark(Tile::Present),
+            colorblind_mark(Tile::Absent)
+        );
     }
 }

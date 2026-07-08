@@ -6,6 +6,8 @@ use ratatui::{
     Frame,
 };
 
+use wordle_solver::core::config::AppConfig;
+
 use crate::tui::theme;
 
 pub struct MenuState {
@@ -61,26 +63,7 @@ pub fn menu_option(selected: usize) -> Option<MenuOption> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn menu_navigation_clamps() {
-        let mut state = MenuState::new();
-        assert_eq!(state.selected, 0);
-        state.move_up();
-        assert_eq!(state.selected, 0);
-        state.move_down(MENU_OPTION_COUNT);
-        assert_eq!(state.selected, MENU_OPTION_COUNT - 1);
-        state.move_down(MENU_OPTION_COUNT);
-        assert_eq!(state.selected, MENU_OPTION_COUNT - 1);
-        state.move_up();
-        assert_eq!(state.selected, MENU_OPTION_COUNT - 2);
-    }
-}
-
-pub fn render(frame: &mut Frame, state: &MenuState) {
+pub fn render(frame: &mut Frame, state: &MenuState, config: &AppConfig) {
     let area = frame.area();
     frame.render_widget(
         Block::default().style(ratatui::style::Style::default().bg(theme::BG)),
@@ -96,14 +79,19 @@ pub fn render(frame: &mut Frame, state: &MenuState) {
         ])
         .split(area);
 
-    let title = Paragraph::new("NYTimes Wordle Solver")
-        .style(theme::title_style())
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(ratatui::style::Style::default().fg(theme::BORDER)),
-        );
+    let mode = if config.easy_mode { "easy" } else { "hard" };
+    let cb = if config.colorblind { " on" } else { " off" };
+    let title = Paragraph::new(format!(
+        "NYTimes Wordle Solver  (mode:{mode} · colorblind{cb} · opener:{})",
+        config.opening
+    ))
+    .style(theme::title_style())
+    .alignment(Alignment::Center)
+    .block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(ratatui::style::Style::default().fg(theme::BORDER)),
+    );
     frame.render_widget(title, chunks[0]);
 
     let items: Vec<ListItem> = OPTIONS
@@ -138,12 +126,13 @@ pub fn render(frame: &mut Frame, state: &MenuState) {
     let footer = if state.show_help {
         Paragraph::new(
             "Solver Aid: manual guesses. Copilot: auto suggestions.\n\
-             NYT hard mode always on (locked greens, required yellows).\n\
-             Enter select | q quit | Esc back",
+             Default hard mode; pass --easy for unconstrained guesses.\n\
+             c colorblind | Enter select | q quit | Esc back",
         )
         .style(theme::muted_style())
     } else {
-        Paragraph::new("↑/↓ navigate | Enter select | ? help | q quit").style(theme::muted_style())
+        Paragraph::new("↑/↓ navigate | Enter select | c colorblind | ? help | q quit")
+            .style(theme::muted_style())
     };
     frame.render_widget(
         footer.alignment(Alignment::Center).block(
@@ -172,4 +161,23 @@ pub fn render_loading(frame: &mut Frame) {
             ),
         area,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_navigation_clamps() {
+        let mut state = MenuState::new();
+        assert_eq!(state.selected, 0);
+        state.move_up();
+        assert_eq!(state.selected, 0);
+        state.move_down(MENU_OPTION_COUNT);
+        assert_eq!(state.selected, MENU_OPTION_COUNT - 1);
+        state.move_down(MENU_OPTION_COUNT);
+        assert_eq!(state.selected, MENU_OPTION_COUNT - 1);
+        state.move_up();
+        assert_eq!(state.selected, MENU_OPTION_COUNT - 2);
+    }
 }

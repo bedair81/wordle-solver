@@ -1,22 +1,20 @@
-use std::io::{self, stdout};
+use std::io;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crossterm::{
-    event::{self, Event, KeyEventKind},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::{backend::CrosstermBackend, Terminal};
+use crossterm::event::{self, Event, KeyEventKind};
 
-use wordle_solver::core::words::WordLists;
+use wordle_solver::core::config::AppConfig;
+use wordle_solver::core::session::{config_from_snapshot, load_session, restore_into_game};
+use wordle_solver::core::words::{load_word_lists, WordLists};
 
 use crate::tui::input::{map_key, Action, InputContext};
 use crate::tui::screens::{
     aid, copilot, menu, InputPhase, MenuOption, MenuState, PlayState, MENU_OPTION_COUNT,
 };
+use crate::tui::terminal_guard::TerminalGuard;
 
 pub enum Screen {
     Menu(MenuState),
@@ -29,13 +27,15 @@ pub struct App {
     pub word_lists: Option<Arc<WordLists>>,
     load_rx: Receiver<Arc<WordLists>>,
     pub should_quit: bool,
+    pub config: AppConfig,
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(config: AppConfig) -> Self {
         let (tx, rx) = mpsc::channel();
+        let cfg = config.clone();
         thread::spawn(move || {
-            let lists = Arc::new(WordLists::load());
+            let lists = Arc::new(load_word_lists(&cfg));
             let _ = tx.send(lists);
         });
 
@@ -44,6 +44,7 @@ impl App {
             word_lists: None,
             load_rx: rx,
             should_quit: false,
+            config,
         }
     }
 
@@ -75,38 +76,83 @@ impl App {
         }
     }
 
-    fn handle_action(&mut self, action: Action) {
-        let word_lists = self.word_lists.clone();
+    fn open_play(&mut self, copilot: bool) {
+        let Some(word_lists) = self.word_lists.clone() else {
+            return;
+        };
+        let session_path = Some(self.config.resolve_session_path());
 
+        let mut restored = None;
+        if let Ok(Some(snap)) = load_session(&self.config.resolve_session_path()) {
+            if snap.copilot == copilot {
+                self.config = config_from_snapshot(&self.config, &snap);
+                restored = Some(snap);
+            }
+        }
+
+        let mut state = if copilot {
+            copilot::new(
+                Arc::clone(&word_lists),
+                self.config.easy_mode,
+                self.config.opening,
+                self.config.colorblind,
+                session_path,
+            )
+        } else {
+            PlayState::new(
+                word_lists,
+                false,
+                "Solver Aid",
+                self.config.easy_mode,
+                self.config.opening,
+                self.config.colorblind,
+                session_path,
+            )
+        };
+
+        if let Some(snap) = restored {
+            if restore_into_game(&mut state.game, &snap).is_ok() {
+                state.colorblind = snap.colorblind;
+                state.after_session_restore();
+            }
+        }
+
+        self.screen = if copilot {
+            Screen::Copilot(state)
+        } else {
+            Screen::Aid(state)
+        };
+    }
+
+    fn handle_action(&mut self, action: Action) {
         match &mut self.screen {
             Screen::Menu(state) => match action {
                 Action::Quit => self.should_quit = true,
                 Action::Up => state.move_up(),
                 Action::Down => state.move_down(MENU_OPTION_COUNT),
                 Action::Help => state.show_help = !state.show_help,
-                Action::Submit => {
-                    let Some(word_lists) = word_lists else {
-                        return;
-                    };
-                    match menu::menu_option(state.selected) {
-                        Some(MenuOption::SolverAid) => {
-                            self.screen =
-                                Screen::Aid(aid::PlayState::new(word_lists, false, "Solver Aid"));
-                        }
-                        Some(MenuOption::Copilot) => {
-                            self.screen = Screen::Copilot(copilot::new(word_lists));
-                        }
-                        None => {}
-                    }
+                Action::ToggleColorblind => {
+                    self.config.colorblind = !self.config.colorblind;
                 }
+                Action::Submit => match menu::menu_option(state.selected) {
+                    Some(MenuOption::SolverAid) => self.open_play(false),
+                    Some(MenuOption::Copilot) => self.open_play(true),
+                    None => {}
+                },
                 _ => {}
             },
             Screen::Aid(state) => {
+                if matches!(action, Action::ToggleColorblind) {
+                    self.config.colorblind = !self.config.colorblind;
+                }
                 if state.handle(action) {
                     self.screen = Screen::Menu(MenuState::new());
                 }
             }
             Screen::Copilot(state) => {
+                if matches!(action, Action::ToggleColorblind) {
+                    self.config.colorblind = !self.config.colorblind;
+                }
                 if copilot::handle(state, action) {
                     self.screen = Screen::Menu(MenuState::new());
                 }
@@ -116,27 +162,25 @@ impl App {
 
     fn tick(&mut self) {
         self.poll_word_lists();
+        match &mut self.screen {
+            Screen::Aid(state) | Screen::Copilot(state) => state.tick(),
+            Screen::Menu(_) => {}
+        }
     }
 }
 
-pub fn run() -> io::Result<()> {
-    enable_raw_mode()?;
-    let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-    terminal.clear()?;
-
-    let mut app = App::new();
-    let tick_rate = Duration::from_millis(100);
+pub fn run(config: AppConfig) -> io::Result<()> {
+    let mut guard = TerminalGuard::enter()?;
+    let mut app = App::new(config);
+    let tick_rate = Duration::from_millis(50);
     let mut last_tick = std::time::Instant::now();
 
     loop {
-        terminal.draw(|frame| render(frame, &mut app))?;
+        guard.terminal().draw(|frame| render(frame, &mut app))?;
 
         let timeout = tick_rate
             .checked_sub(last_tick.elapsed())
-            .unwrap_or_else(|| Duration::from_secs(0));
+            .unwrap_or(Duration::from_secs(0));
 
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
@@ -159,9 +203,7 @@ pub fn run() -> io::Result<()> {
         }
     }
 
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    guard.leave()?;
     Ok(())
 }
 
@@ -172,7 +214,7 @@ fn render(frame: &mut ratatui::Frame, app: &mut App) {
     }
 
     match &mut app.screen {
-        Screen::Menu(state) => menu::render(frame, state),
+        Screen::Menu(state) => menu::render(frame, state, &app.config),
         Screen::Aid(state) => aid::render(frame, state),
         Screen::Copilot(state) => copilot::render(frame, state),
     }

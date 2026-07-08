@@ -3,7 +3,7 @@ use ratatui::{buffer::Buffer, layout::Rect, style::Style, widgets::Widget};
 use wordle_solver::core::pattern::{Pattern, Tile};
 use wordle_solver::core::word::Word;
 
-use crate::tui::theme::{self, tile_style};
+use crate::tui::theme::{self, colorblind_mark, tile_style};
 
 pub struct TileRow<'a> {
     pub word: Option<Word>,
@@ -13,6 +13,7 @@ pub struct TileRow<'a> {
     pub fixed_letters: Option<[Option<u8>; 5]>,
     pub feedback_draft: Option<[Option<Tile>; 5]>,
     pub feedback_cursor: Option<usize>,
+    pub colorblind: bool,
 }
 
 impl TileRow<'_> {
@@ -56,7 +57,7 @@ impl TileRow<'_> {
 
 impl Widget for TileRow<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let cell_width = 3;
+        let cell_width = if self.colorblind { 4 } else { 3 };
         let gap = 1;
         let total_width = cell_width * 5 + gap * 4;
         let start_x = area.x + (area.width.saturating_sub(total_width)) / 2;
@@ -75,7 +76,7 @@ impl Widget for TileRow<'_> {
                 || self.fixed_letters.is_some();
 
             let style = if styled {
-                tile_style(tile, focused)
+                tile_style(tile, focused, self.colorblind)
             } else {
                 Style::default()
                     .fg(theme::FG)
@@ -85,6 +86,8 @@ impl Widget for TileRow<'_> {
 
             let label = if ch == ' ' {
                 " ".repeat(cell_width as usize)
+            } else if self.colorblind && styled {
+                format!("{}{} ", colorblind_mark(tile), ch.to_ascii_uppercase())
             } else {
                 format!(" {} ", ch.to_ascii_uppercase())
             };
@@ -97,5 +100,32 @@ impl Widget for TileRow<'_> {
             };
             buf.set_string(cell_area.x, cell_area.y, label, style);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordle_solver::core::pattern::{Pattern, Tile};
+    use wordle_solver::core::word::Word;
+
+    #[test]
+    fn colorblind_label_includes_mark() {
+        // Structural: colorblind path uses mark + letter.
+        let mark = colorblind_mark(Tile::Correct);
+        assert_eq!(mark, '■');
+        let word = Word::parse("slate").unwrap();
+        let pattern = Pattern::new([Tile::Correct; 5]);
+        let row = TileRow {
+            word: Some(word),
+            pattern: Some(pattern),
+            buffer: None,
+            fixed_letters: None,
+            feedback_draft: None,
+            feedback_cursor: None,
+            colorblind: true,
+        };
+        assert_eq!(row.letter_at(0), 's');
+        assert_eq!(row.tile_at(0), Tile::Correct);
     }
 }

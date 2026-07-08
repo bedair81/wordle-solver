@@ -5,9 +5,11 @@ use wordle_solver::core::feedback::compute_feedback;
 use wordle_solver::core::filter::filter_by_history;
 use wordle_solver::core::game::GameState;
 use wordle_solver::core::pattern::Pattern;
-use wordle_solver::core::solver::{suggest_guess_interactive, INTERACTIVE_SUGGESTION_BUDGET};
+use wordle_solver::core::solver::{
+    interactive_suggestion_budget, suggest_guess_interactive, INTERACTIVE_SUGGESTION_BUDGET,
+};
 use wordle_solver::core::word::Word;
-use wordle_solver::core::words::WordLists;
+use wordle_solver::core::words::{shared_word_lists, OPENING_GUESS};
 
 fn w(s: &str) -> Word {
     Word::parse(s).unwrap()
@@ -18,20 +20,21 @@ fn pat(s: &str) -> Pattern {
 }
 
 fn timed_interactive(
-    lists: &WordLists,
+    lists: &wordle_solver::core::words::WordLists,
     remaining: &[Word],
     history: &[(Word, Pattern)],
     turns_left: usize,
 ) -> Duration {
     let start = Instant::now();
-    let _ = suggest_guess_interactive(lists, remaining, history, turns_left);
+    let _ = suggest_guess_interactive(lists, remaining, history, turns_left, false, OPENING_GUESS);
     start.elapsed()
 }
 
 fn main() {
     let full_scan = std::env::args().any(|a| a == "--full");
-    let lists = WordLists::load();
+    let lists = shared_word_lists();
     let mut samples: Vec<(String, Duration)> = Vec::new();
+    let budget = interactive_suggestion_budget();
 
     // Turn 2: typical post-opening (worst-case pool size) — UI path
     {
@@ -58,8 +61,7 @@ fn main() {
 
     // GameState path (exact TUI code path)
     {
-        let lists_arc = std::sync::Arc::new(lists.clone());
-        let mut game = GameState::new(lists_arc);
+        let mut game = GameState::new(std::sync::Arc::clone(&lists));
         game.record_turn(w("slate"), pat("xxxxx")).unwrap();
         let start = Instant::now();
         let _ = game.suggest_next();
@@ -79,46 +81,26 @@ fn main() {
             let d = timed_interactive(&lists, &remaining, &history, 5);
             if d > max_d {
                 max_d = d;
-                max_label = format!("{} ({} rem)", target, remaining.len());
+                max_label = format!("{target} remaining={}", remaining.len());
             }
         }
-        samples.push((format!("FULL UI turn-2 max: {max_label}"), max_d));
+        samples.push((format!("FULL max after slate ({max_label})"), max_d));
     }
 
-    samples.sort_by_key(|b| std::cmp::Reverse(b.1));
-
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    println!("Interactive suggestion latency ({profile} build):");
-    println!("Budget: {:.0}s\n", INTERACTIVE_SUGGESTION_BUDGET.as_secs_f64());
-
+    println!("Interactive suggestion latency (budget {:?})", budget);
+    println!(
+        "Legacy const INTERACTIVE_SUGGESTION_BUDGET = {:?}",
+        INTERACTIVE_SUGGESTION_BUDGET
+    );
+    let mut ok = true;
     for (label, d) in &samples {
-        let ms = d.as_secs_f64() * 1000.0;
-        let flag = if *d > INTERACTIVE_SUGGESTION_BUDGET {
-            " *** OVER BUDGET ***"
-        } else if *d > Duration::from_secs(3) {
-            " (slow)"
-        } else {
-            ""
-        };
-        println!("  {ms:8.1} ms  {label}{flag}");
+        let status = if *d <= budget { "OK" } else { "OVER" };
+        if *d > budget {
+            ok = false;
+        }
+        println!("  [{status}] {label}: {:.3}s", d.as_secs_f64());
     }
-
-    let max = samples[0].1;
-    if max > INTERACTIVE_SUGGESTION_BUDGET {
-        eprintln!(
-            "\nFAIL: max latency {:.2}s exceeds {:.0}s budget",
-            max.as_secs_f64(),
-            INTERACTIVE_SUGGESTION_BUDGET.as_secs_f64()
-        );
+    if !ok {
         std::process::exit(1);
     }
-    println!(
-        "\nOK: max latency {:.2}s within {:.0}s budget",
-        max.as_secs_f64(),
-        INTERACTIVE_SUGGESTION_BUDGET.as_secs_f64()
-    );
 }

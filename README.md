@@ -1,18 +1,17 @@
 # NYTimes Wordle Solver
 
-A Rust Wordle solver with a terminal UI (TUI). Uses official NYT Wordle word lists and an entropy-based guessing strategy. All play follows NYT hard mode rules (green positions fixed; yellow letters must appear in later guesses).
-
-NYT also lets you disable hard mode in the official game; this project always assumes hard mode is on, matching the default NYT setting.
+A Rust Wordle solver with a terminal UI (TUI) and headless CLI. Uses official NYT Wordle word lists and an entropy-based guessing strategy. **Hard mode is the default** (green positions fixed; yellow letters must appear in later guesses). Pass `--easy` to disable hard-mode constraints.
 
 ## Requirements
 
-- Rust 1.70+ (2021 edition)
-- A terminal with UTF-8 support
+- Rust 1.74+ (2021 edition)
+- A terminal with UTF-8 support (for the TUI)
 
 ## Build & Run
 
 ```bash
-cargo run --release
+cargo run --release                 # interactive TUI
+cargo run --release -- suggest --history slate:xxxxx
 ```
 
 Run tests:
@@ -27,7 +26,7 @@ Verify interactive suggestion latency (each UI suggestion under 10s):
 cargo run --release --bin suggestion-latency
 ```
 
-Fast CI runs hard-case smoke tests only (~5–6s release, ~1–2 min debug). For strided quality sampling:
+Fast CI runs hard-case smoke tests only. For strided quality sampling:
 
 ```bash
 cargo test --release auto_solves_strided_sample -- --ignored
@@ -39,25 +38,39 @@ Full benchmark (all ~2,309 answers, ~15–25 minutes in release):
 cargo test --release --test integration -- --ignored --nocapture
 ```
 
+## Headless CLI
+
+```bash
+# Next guess after turns (guess:G/Y/X pattern, comma-separated)
+wordle-solver suggest --history slate:xxxxx,crane:xxYxx
+
+# Easy mode (no hard-mode letter constraints)
+wordle-solver suggest --history slate:Gxxxx --easy
+
+# Custom opening word when history is empty
+wordle-solver suggest --opener crane
+
+# TUI flags
+wordle-solver --easy --colorblind --opener slate
+```
+
+Patterns use `G` green, `Y` yellow, `X` gray (also `g`/`y`/`x`).
+
 ## Screens
 
 ### Solver Aid
 
 Enter the guesses you have played on [NYT Wordle](https://www.nytimes.com/games/wordle) along with the tile feedback. The solver filters the remaining possible answers and suggests an optimal next guess.
 
-The first suggested guess appears **after you commit turn 1** (opening play is yours on NYT). From turn 2 onward, suggestions follow each committed turn.
+Suggestions after turn 1 run **off the UI thread** (status shows “computing…”) so quit/back/undo stay responsive.
 
-1. Type letters for each **unlocked** tile (green tiles from prior turns are fixed), then press **Enter**
+1. Type letters for each **unlocked** tile (green tiles from prior turns are fixed in hard mode), then press **Enter**
 2. Set each tile to match NYT colors: **g** green, **y** yellow, **x** gray (or **Space** to cycle)
 3. Press **Enter** to commit the turn
 
-Your guess must satisfy NYT hard mode before feedback entry (greens in place, all prior yellow letters included). Guesses may be words outside our cached guess list (with a warning); only answers are restricted to the NYT answer list.
-
 ### Copilot
 
-The solver picks each guess for you. Play the suggested word on NYT Wordle, then return and enter the feedback colors. Repeat until solved.
-
-Copilot only suggests words from our bundled guess list (NYT-legal guesses). Solver Aid allows typing any five letters, which is useful when NYT accepts a word we do not have cached.
+The solver picks each guess for you. Play the suggested word on NYT Wordle, then return and enter the feedback colors.
 
 ## Key Bindings
 
@@ -68,41 +81,49 @@ Copilot only suggests words from our bundled guess list (NYT-legal guesses). Sol
 | `g` / `y` / `x` | Set tile green / yellow / gray (feedback phase) |
 | `Space` | Cycle tile color (feedback phase) |
 | `←` / `→` | Move feedback cursor (feedback phase) |
+| `c` | Toggle colorblind tile mode (menu / feedback / view) |
 | `u` | Undo last turn (feedback phase or game-over only) |
 | `r` | Reset game (feedback phase or game-over only) |
 | `?` | Toggle help |
 | `Esc` | Back to menu |
 | `q` | Quit |
 
-While typing a guess, all letters (including `u` and `r`) go into the word — undo during typing is intentionally disabled so those keys can be used in words like `crumb` or `urged`. `u` undo and `r` reset are only active in the feedback phase or after the game ends.
+While typing a guess, all letters (including `u`, `r`, and `c`) go into the word.
 
-## Guess Rules (NYT Hard Mode)
+## Modes & session
 
-- **Green** letters must stay in the same position in every later guess
-- **Yellow** letters must appear in every later guess (including duplicates when multiple yellows were shown)
-
-The solver only suggests guesses that satisfy these constraints. Solver Aid rejects guesses that violate them.
+- **Hard mode (default)** — greens fixed; prior yellow/green letters required
+- **Easy mode** — `--easy` on CLI/TUI launch; no hard-mode constraints on guesses
+- **Colorblind tiles** — high-contrast blue/orange palette plus `■` / `▲` / `·` marks (`c` to toggle)
+- **Configurable opener** — `--opener WORD` (default `slate`)
+- **Session restore** — in-progress games are saved under `~/.local/share/wordle-solver/session.txt` (override with `WORDLE_SOLVER_SESSION`)
 
 ## Word Lists
 
 Bundled under `data/`:
 
-- `answers.txt` — NYT solution words (~2,350): fredoverflow answer pool merged with [eithan/wordlelist](https://github.com/eithan/wordlelist) (daily NYT API archive, includes recent additions like `emoji`)
+- `answers.txt` — NYT solution words (~2,350)
 - `allowed_guesses.txt` — additional valid guesses (~10,662)
 
-Lists are extracted from NYT Wordle client data via community-maintained sources and may drift if NYT updates their dictionary.
+Refresh:
+
+```bash
+./scripts/update-wordlists.sh
+```
+
+## Pattern cache
+
+Guess×answer feedback is cached on disk under `~/.cache/wordle-solver/` (or `$WORDLE_SOLVER_CACHE`). First load builds and writes the cache; later launches load it when the word lists match.
 
 ## Algorithm
 
-Quality-first solver, optimized for interactive use:
-
-- **Pattern cache** — all guess×answer feedback precomputed at startup (~0.5s once in release), then O(1) lookups per scoring step
-- **Interactive budget** — each UI suggestion completes within **10 seconds** (`GameState::suggest_next`); typical release latency ~2s after turn 2
-- **Smart candidate pool** — early game ranks ~2000 heuristic guesses by 1-ply entropy, keeps the top 1000 (470 in debug UI builds), plus all remaining answers; late game uses the compliant pool or remaining answers when few candidates remain
-- **2-ply lookahead** — UI path refines up to **110** top 1-ply candidates in release (~45 in debug); auto-solve/benchmarks use 55 (75 when ≤3 turns left; all guesses when ≤30 answers remain)
-- **Endgame heuristics** — minimax bucket sizing, off-list partition probes for suffix clusters, and forced-win search on tiny sets when turns are tight
-- **Opening guess** — **SLATE** (instant, no startup computation)
-- **Multi-criteria scoring** — entropy, minimax worst bucket, expected remaining, win-aware tie-break
+- **Pattern cache** — O(1) feedback lookups after load
+- **Interactive budget** — UI suggestions target ≤ **10 seconds** (typical release ~0.5–2s after turn 2)
+- **Parallel scoring** — 1-ply and 2-ply candidate evaluation via Rayon
+- **Smart candidate pool** — early-game heuristic prepool + entropy ranking
+- **2-ply lookahead** — refines top candidates within the interactive budget
+- **Exact endgame** — minimax-style search when ≤8 answers remain
+- **Opening guess** — configurable (default **SLATE**)
 
 Run a full quality report:
 
@@ -110,24 +131,20 @@ Run a full quality report:
 cargo run --release --bin solver-quality
 ```
 
-## Notes
-
-- **Feedback** — standard NYT rules including duplicate-letter handling
-- **Filtering** — eliminate answers inconsistent with turn history
-
-The solver solves 100% of NYT answer words within 6 guesses with NYT hard-mode constraints always enforced. Verify with:
-
-```bash
-cargo test --release --test integration -- --ignored --nocapture
-cargo run --release --bin solver-quality
-cargo run --release --bin suggestion-latency -- --full
-```
-
 ## Project Structure
 
 ```
-src/core/     — word lists, feedback, filtering, entropy solver, game state
-src/tui/      — ratatui interface and screens
+src/core/     — word lists, cache, feedback, filtering, entropy solver, game/session
+src/tui/      — ratatui interface (async suggestions, terminal guard)
+src/cli.rs    — headless suggest command
 data/         — NYT word lists
 tests/        — integration tests
+.github/      — CI (fmt, clippy, release tests)
 ```
+
+## Environment
+
+| Variable | Purpose |
+|----------|---------|
+| `WORDLE_SOLVER_CACHE` | Pattern-cache directory |
+| `WORDLE_SOLVER_SESSION` | Session file path |

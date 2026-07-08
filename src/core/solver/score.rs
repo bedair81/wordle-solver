@@ -5,6 +5,8 @@ use crate::core::pattern::Pattern;
 use crate::core::word::Word;
 use crate::core::words::WordLists;
 
+use crate::core::config::solver_config;
+
 use super::candidates::{followup_guess_pool, CandidateBuffer};
 
 /// Base-3 index in `0..243` for fixed-size pattern buckets.
@@ -57,10 +59,6 @@ pub struct GuessScore {
     pub frequency: usize,
 }
 
-/// When ≤ this many turns remain, follow-up and final comparison prefer minimax bucket sizing
-/// over entropy (endgame positions where a single oversized bucket loses the game).
-const TIGHT_TURNS_PARTITION_CUTOFF: usize = 4;
-
 /// 1-ply entropies within this gap (bits) are treated as tied; consult 2-ply next.
 const TWO_PLY_TIE_EPSILON: f64 = 0.022;
 
@@ -83,7 +81,8 @@ pub fn compare_final(
     // `ENDGAME_PROBE_MAX_REMAINING` heuristics in mod.rs) because an oversized bucket
     // loses even mid-game if only a few guesses remain.
     if let Some(left) = turns_left {
-        if left <= TIGHT_TURNS_PARTITION_CUTOFF && a.worst_bucket != b.worst_bucket {
+        if left <= solver_config().tight_turns_partition_cutoff && a.worst_bucket != b.worst_bucket
+        {
             let a_ok = partition_sufficient(a.worst_bucket, left);
             let b_ok = partition_sufficient(b.worst_bucket, left);
             match (a_ok, b_ok) {
@@ -109,11 +108,7 @@ pub fn compare_final(
     }
 }
 
-pub fn compare_one_ply(
-    a: GuessScore,
-    b: GuessScore,
-    remaining_len: usize,
-) -> std::cmp::Ordering {
+pub fn compare_one_ply(a: GuessScore, b: GuessScore, remaining_len: usize) -> std::cmp::Ordering {
     a.one_ply_entropy
         .partial_cmp(&b.one_ply_entropy)
         .unwrap_or(std::cmp::Ordering::Equal)
@@ -219,7 +214,8 @@ fn compare_followup(
     remaining_len: usize,
 ) -> std::cmp::Ordering {
     if let Some(left) = turns_left {
-        if left <= TIGHT_TURNS_PARTITION_CUTOFF && a.worst_bucket != b.worst_bucket {
+        if left <= solver_config().tight_turns_partition_cutoff && a.worst_bucket != b.worst_bucket
+        {
             let a_ok = partition_sufficient(a.worst_bucket, left);
             let b_ok = partition_sufficient(b.worst_bucket, left);
             match (a_ok, b_ok) {
@@ -265,6 +261,7 @@ fn score_two_ply_with_scratch(
     remaining: &[Word],
     history: &[(Word, Pattern)],
     turns_left: Option<usize>,
+    easy_mode: bool,
 ) -> GuessScore {
     use crate::core::feedback::compute_feedback;
 
@@ -305,6 +302,7 @@ fn score_two_ply_with_scratch(
                 subset,
                 &scratch.extended_history,
                 followup_turns,
+                easy_mode,
                 &mut scratch.followup_buffer,
             );
             best_followup_one_ply(
@@ -330,6 +328,26 @@ pub fn score_two_ply(
     history: &[(Word, Pattern)],
     turns_left: Option<usize>,
 ) -> GuessScore {
+    score_two_ply_with_mode(
+        word_lists,
+        score,
+        remaining,
+        _remaining_set,
+        history,
+        turns_left,
+        false,
+    )
+}
+
+pub fn score_two_ply_with_mode(
+    word_lists: &WordLists,
+    score: GuessScore,
+    remaining: &[Word],
+    _remaining_set: &HashSet<Word>,
+    history: &[(Word, Pattern)],
+    turns_left: Option<usize>,
+    easy_mode: bool,
+) -> GuessScore {
     TWO_PLY_SCRATCH.with(|scratch| {
         score_two_ply_with_scratch(
             &mut scratch.borrow_mut(),
@@ -338,6 +356,7 @@ pub fn score_two_ply(
             remaining,
             history,
             turns_left,
+            easy_mode,
         )
     })
 }
@@ -378,7 +397,10 @@ mod tests {
     fn prefers_possible_answer_on_one_ply_tie() {
         let answer = gs("crate", 0.0, 1.0, 2, 1.0, true);
         let probe = gs("slate", 0.0, 1.0, 2, 1.0, false);
-        assert_eq!(compare_one_ply(answer, probe, 4), std::cmp::Ordering::Greater);
+        assert_eq!(
+            compare_one_ply(answer, probe, 4),
+            std::cmp::Ordering::Greater
+        );
         assert_eq!(compare_one_ply(probe, answer, 4), std::cmp::Ordering::Less);
     }
 
@@ -386,7 +408,10 @@ mod tests {
     fn compare_one_ply_prefers_smaller_worst_bucket_on_entropy_tie() {
         let better = gs("crate", 0.0, 1.0, 1, 1.5, false);
         let worse = gs("slate", 0.0, 1.0, 3, 1.5, false);
-        assert_eq!(compare_one_ply(better, worse, 100), std::cmp::Ordering::Greater);
+        assert_eq!(
+            compare_one_ply(better, worse, 100),
+            std::cmp::Ordering::Greater
+        );
     }
 
     #[test]

@@ -5,9 +5,9 @@ use crate::core::hard_mode::satisfies_hard_mode;
 use crate::core::pattern::Pattern;
 use crate::core::solver::Suggestion;
 use crate::core::word::Word;
-use crate::core::words::WordLists;
+use crate::core::words::{WordLists, OPENING_GUESS};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Turn {
     pub guess: Word,
     pub pattern: Pattern,
@@ -16,20 +16,42 @@ pub struct Turn {
 #[derive(Clone)]
 pub struct GameState {
     pub turns: Vec<Turn>,
-    history: Vec<(Word, Pattern)>,
     pub word_lists: Arc<WordLists>,
     remaining_answers: Vec<Word>,
+    easy_mode: bool,
+    opening: Word,
 }
 
 impl GameState {
     pub fn new(word_lists: Arc<WordLists>) -> Self {
+        Self::with_options(word_lists, false, OPENING_GUESS)
+    }
+
+    pub fn with_options(word_lists: Arc<WordLists>, easy_mode: bool, opening: Word) -> Self {
         let remaining_answers = word_lists.answers.clone();
         Self {
             turns: Vec::new(),
-            history: Vec::new(),
             word_lists,
             remaining_answers,
+            easy_mode,
+            opening,
         }
+    }
+
+    pub fn easy_mode(&self) -> bool {
+        self.easy_mode
+    }
+
+    pub fn set_easy_mode(&mut self, easy: bool) {
+        self.easy_mode = easy;
+    }
+
+    pub fn opening(&self) -> Word {
+        self.opening
+    }
+
+    pub fn set_opening(&mut self, opening: Word) {
+        self.opening = opening;
     }
 
     pub fn remaining_answers(&self) -> &[Word] {
@@ -40,8 +62,9 @@ impl GameState {
         self.remaining_answers.len()
     }
 
-    pub fn history(&self) -> &[(Word, Pattern)] {
-        &self.history
+    /// History as (guess, pattern) pairs for the solver (allocated; max 6 turns).
+    pub fn history(&self) -> Vec<(Word, Pattern)> {
+        self.turns.iter().map(|t| (t.guess, t.pattern)).collect()
     }
 
     pub fn suggest_next(&self) -> Option<Suggestion> {
@@ -50,11 +73,14 @@ impl GameState {
         }
 
         let turns_left = 6usize.saturating_sub(self.turns.len());
+        let history = self.history();
         let suggestion = crate::core::solver::suggest_guess_interactive(
             &self.word_lists,
             &self.remaining_answers,
-            &self.history,
+            &history,
             turns_left,
+            self.easy_mode,
+            self.opening,
         )?;
         if !self.word_lists.is_valid_guess(suggestion.word) {
             return None;
@@ -86,19 +112,20 @@ impl GameState {
             return Err(GameError::InvalidGuess(guess));
         }
 
-        if !satisfies_hard_mode(guess, &self.history) {
-            return Err(GameError::HardModeViolation);
+        if !self.easy_mode {
+            let history = self.history();
+            if !satisfies_hard_mode(guess, &history) {
+                return Err(GameError::HardModeViolation);
+            }
         }
 
         self.turns.push(Turn { guess, pattern });
-        self.history.push((guess, pattern));
         filter_candidates_in_place(&mut self.remaining_answers, guess, pattern);
         Ok(())
     }
 
     pub fn undo_turn(&mut self) -> bool {
         if self.turns.pop().is_some() {
-            self.history.pop();
             self.recompute_remaining();
             true
         } else {
@@ -108,7 +135,6 @@ impl GameState {
 
     pub fn reset(&mut self) {
         self.turns.clear();
-        self.history.clear();
         self.remaining_answers = self.word_lists.answers.clone();
     }
 
@@ -124,8 +150,8 @@ impl GameState {
     }
 
     fn recompute_remaining(&mut self) {
-        self.remaining_answers =
-            filter_by_history(&self.word_lists.answers, &self.history);
+        let history = self.history();
+        self.remaining_answers = filter_by_history(&self.word_lists.answers, &history);
     }
 }
 
@@ -156,7 +182,7 @@ mod tests {
     use super::*;
     use crate::core::pattern::Pattern;
     use crate::core::word::Word;
-    use std::sync::Arc;
+    use crate::core::words::shared_word_lists;
 
     fn w(s: &str) -> Word {
         Word::parse(s).unwrap()
@@ -167,7 +193,7 @@ mod tests {
     }
 
     fn game() -> GameState {
-        GameState::new(Arc::new(crate::core::words::WordLists::load()))
+        GameState::new(shared_word_lists())
     }
 
     #[test]
@@ -185,6 +211,13 @@ mod tests {
             game.record_turn(w("plate"), pat("xxxxx")),
             Err(GameError::HardModeViolation)
         );
+    }
+
+    #[test]
+    fn easy_mode_allows_hard_mode_violation() {
+        let mut game = GameState::with_options(shared_word_lists(), true, OPENING_GUESS);
+        game.record_turn(w("slate"), pat("Gxxxx")).unwrap();
+        assert!(game.record_turn(w("plate"), pat("xxxxx")).is_ok());
     }
 
     #[test]
@@ -251,19 +284,28 @@ mod tests {
     fn interactive_suggestion_within_budget() {
         use std::time::Instant;
 
-        use crate::core::solver::INTERACTIVE_SUGGESTION_BUDGET;
+        use crate::core::config::solver_config;
 
-        let lists = Arc::new(crate::core::words::WordLists::load());
+        let lists = shared_word_lists();
         let mut game = GameState::new(lists);
         game.record_turn(w("slate"), pat("xxxxx")).unwrap();
 
         let start = Instant::now();
         assert!(game.suggest_next().is_some());
+        let budget = solver_config().interactive_budget();
         assert!(
-            start.elapsed() <= INTERACTIVE_SUGGESTION_BUDGET,
+            start.elapsed() <= budget,
             "suggest_next took {:.2}s (budget {:.0}s)",
             start.elapsed().as_secs_f64(),
-            INTERACTIVE_SUGGESTION_BUDGET.as_secs_f64()
+            budget.as_secs_f64()
         );
+    }
+
+    #[test]
+    fn configurable_opener_used_on_empty_history() {
+        let opener = w("crane");
+        let game = GameState::with_options(shared_word_lists(), false, opener);
+        let suggestion = game.suggest_next().unwrap();
+        assert_eq!(suggestion.word, opener);
     }
 }

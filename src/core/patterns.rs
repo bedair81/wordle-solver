@@ -44,6 +44,30 @@ impl PatternCache {
         }
     }
 
+    /// Reconstruct from a validated on-disk payload (word order must match `data` layout).
+    pub fn from_parts(answers: &[Word], guess_pool: &[Word], data: Vec<u8>) -> Self {
+        let num_answers = answers.len();
+        debug_assert_eq!(data.len(), guess_pool.len() * num_answers);
+        let mut answer_index = HashMap::with_capacity(num_answers);
+        for (i, &word) in answers.iter().enumerate() {
+            answer_index.insert(word, i);
+        }
+        let mut guess_index = HashMap::with_capacity(guess_pool.len());
+        for (i, &word) in guess_pool.iter().enumerate() {
+            guess_index.insert(word, i);
+        }
+        Self {
+            num_answers,
+            answer_index,
+            guess_index,
+            data,
+        }
+    }
+
+    pub fn data_slice(&self) -> &[u8] {
+        &self.data
+    }
+
     pub fn bucket(&self, guess: Word, answer: Word) -> Option<usize> {
         let gi = self.guess_index.get(&guess)?;
         let ai = self.answer_index.get(&answer)?;
@@ -107,13 +131,13 @@ impl PatternCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::words::WordLists;
+    use crate::core::words::shared_word_lists;
 
     #[test]
     fn cache_matches_live_feedback() {
         use crate::core::feedback::compute_feedback;
 
-        let lists = WordLists::load();
+        let lists = shared_word_lists();
         let guess = Word::parse("slate").unwrap();
         let answer = Word::parse("crate").unwrap();
         let expected = pattern_bucket_index(compute_feedback(guess, answer));
@@ -122,13 +146,26 @@ mod tests {
 
     #[test]
     fn build_buckets_for_unknown_guess_matches_live() {
-        let lists = WordLists::load();
+        let lists = shared_word_lists();
         let guess = Word::parse("qqqqq").unwrap();
-        let remaining = [
-            Word::parse("agree").unwrap(),
-            Word::parse("abbey").unwrap(),
-        ];
+        let remaining = [Word::parse("agree").unwrap(), Word::parse("abbey").unwrap()];
         let live = lists.pattern_cache.build_buckets_for(guess, &remaining);
         assert!(live.nonempty >= 1);
+    }
+
+    #[test]
+    fn from_parts_matches_build() {
+        let answers = [Word::parse("crane").unwrap(), Word::parse("slate").unwrap()];
+        let guesses = [
+            Word::parse("crane").unwrap(),
+            Word::parse("slate").unwrap(),
+            Word::parse("audio").unwrap(),
+        ];
+        let built = PatternCache::build(&answers, &guesses);
+        let rebuilt = PatternCache::from_parts(&answers, &guesses, built.data_slice().to_vec());
+        assert_eq!(
+            rebuilt.bucket(guesses[2], answers[0]),
+            built.bucket(guesses[2], answers[0])
+        );
     }
 }

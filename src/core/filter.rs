@@ -41,10 +41,7 @@ pub fn filter_by_history(candidates: &[Word], history: &[(Word, Pattern)]) -> Ve
 /// Words in the guess pool that satisfy the full turn history but are not in the
 /// bundled NYT answer list. Useful when feedback is consistent but `answers.txt`
 /// is missing a word NYT accepted as a solution.
-pub fn guess_pool_only_matches(
-    word_lists: &WordLists,
-    history: &[(Word, Pattern)],
-) -> Vec<Word> {
+pub fn guess_pool_only_matches(word_lists: &WordLists, history: &[(Word, Pattern)]) -> Vec<Word> {
     if !filter_by_history(&word_lists.answers, history).is_empty() {
         return Vec::new();
     }
@@ -98,10 +95,7 @@ mod tests {
     #[test]
     fn filter_in_place_matches_collect() {
         let lists = WordLists::load();
-        let history = vec![
-            (w("slate"), pat("xxGGG")),
-            (w("crate"), pat("xGxxx")),
-        ];
+        let history = vec![(w("slate"), pat("xxGGG")), (w("crate"), pat("xGxxx"))];
         let expected = filter_via_collect_chain(&lists.answers, &history);
         let mut in_place = lists.answers.clone();
         for &(guess, pattern) in &history {
@@ -113,10 +107,7 @@ mod tests {
     #[test]
     fn filter_by_history_matches_collect_chain() {
         let lists = WordLists::load();
-        let history = vec![
-            (w("slate"), pat("xxGGG")),
-            (w("crate"), pat("xGxxx")),
-        ];
+        let history = vec![(w("slate"), pat("xxGGG")), (w("crate"), pat("xGxxx"))];
         let via_history = filter_by_history(&lists.answers, &history);
         let via_collect = filter_via_collect_chain(&lists.answers, &history);
         assert_eq!(via_history, via_collect);

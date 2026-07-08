@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     Quit,
     Back,
@@ -18,6 +18,7 @@ pub enum Action {
     CycleTile,
     TileLeft,
     TileRight,
+    ToggleColorblind,
 }
 
 /// Controls which keys are interpreted as shortcuts vs typed input.
@@ -55,6 +56,15 @@ pub fn map_key(event: KeyEvent, ctx: InputContext) -> Option<Action> {
         KeyCode::Down => Some(Action::Down),
         KeyCode::Enter => Some(Action::Submit),
         KeyCode::Char('?') => Some(Action::Help),
+        // Colorblind toggle: 'c' outside typing; Ctrl is quit.
+        KeyCode::Char('c')
+            if event.modifiers.is_empty() && !ctx.allows_typing() && !ctx.allows_tile_keys() =>
+        {
+            Some(Action::ToggleColorblind)
+        }
+        KeyCode::Char('c') if event.modifiers.is_empty() && ctx.allows_play_shortcuts() => {
+            Some(Action::ToggleColorblind)
+        }
         KeyCode::Char('u') if ctx.allows_play_shortcuts() => Some(Action::Undo),
         KeyCode::Char('r') if ctx.allows_play_shortcuts() => Some(Action::Reset),
         KeyCode::Backspace if ctx.allows_typing() => Some(Action::Delete),
@@ -101,10 +111,7 @@ mod tests {
             map_key(key('h'), InputContext::TypingWord),
             Some(Action::Char('h'))
         ));
-        assert!(matches!(
-            map_key(key('h'), InputContext::SettingFeedback),
-            None
-        ));
+        assert!(map_key(key('h'), InputContext::SettingFeedback).is_none());
     }
 
     #[test]
@@ -136,6 +143,22 @@ mod tests {
         assert!(matches!(
             map_key(key('r'), InputContext::SettingFeedback),
             Some(Action::Reset)
+        ));
+    }
+
+    #[test]
+    fn colorblind_toggle_in_feedback_and_menu() {
+        assert!(matches!(
+            map_key(key('c'), InputContext::SettingFeedback),
+            Some(Action::ToggleColorblind)
+        ));
+        assert!(matches!(
+            map_key(key('c'), InputContext::Menu),
+            Some(Action::ToggleColorblind)
+        ));
+        assert!(matches!(
+            map_key(key('c'), InputContext::TypingWord),
+            Some(Action::Char('c'))
         ));
     }
 }

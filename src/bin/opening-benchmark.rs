@@ -89,11 +89,12 @@ fn main() {
 
     results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    println!("Opening guess benchmark ({} answers):\n", lists.answers.len());
+    println!(
+        "Opening guess benchmark ({} answers):\n",
+        lists.answers.len()
+    );
     for (word, avg, total, worst) in &results {
-        println!(
-            "  {word}: avg={avg:.4} total={total} worst={worst}"
-        );
+        println!("  {word}: avg={avg:.4} total={total} worst={worst}");
     }
 
     if let Some((best, avg, _, _)) = results.first() {

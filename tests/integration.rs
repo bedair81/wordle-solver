@@ -5,7 +5,7 @@ use wordle_solver::core::solver::{
     auto_solve, compare_final, compute_suggestion, score_one_ply, score_two_ply,
 };
 use wordle_solver::core::word::Word;
-use wordle_solver::core::words::WordLists;
+use wordle_solver::core::words::shared_word_lists;
 
 fn assert_valid_auto_solve(
     history: &[(Word, wordle_solver::core::pattern::Pattern)],
@@ -29,7 +29,7 @@ fn assert_valid_auto_solve(
 
 #[test]
 fn auto_solves_sample_words() {
-    let lists = WordLists::load();
+    let lists = shared_word_lists();
     for target in [
         "crane", "slate", "eerie", "brood", "hello", "bound", "wound",
     ] {
@@ -42,7 +42,7 @@ fn auto_solves_sample_words() {
 #[test]
 #[ignore]
 fn auto_solves_all_answers_within_six_guesses() {
-    let lists = WordLists::load();
+    let lists = shared_word_lists();
     let mut failures = Vec::new();
     let mut total_guesses = 0usize;
     let mut worst = 0usize;
@@ -83,7 +83,7 @@ fn auto_solves_all_answers_within_six_guesses() {
 #[test]
 #[ignore]
 fn quality_benchmark_stats() {
-    let lists = WordLists::load();
+    let lists = shared_word_lists();
     let mut total_guesses = 0usize;
     let mut distribution = [0usize; 6];
     let mut hardest: Vec<(Word, usize)> = Vec::new();
@@ -123,7 +123,7 @@ const FAST_HARD_CASES: &[&str] = &[
 /// Fast smoke: known hard cases only (~5–6s release, ~1–2 min debug). Always runs in CI.
 #[test]
 fn auto_solves_hard_cases_smoke() {
-    let lists = WordLists::load();
+    let lists = shared_word_lists();
     for &target in FAST_HARD_CASES {
         let word = Word::parse(target).unwrap();
         let history = auto_solve(&lists, word).unwrap_or_else(|| panic!("failed {target}"));
@@ -136,7 +136,7 @@ fn auto_solves_hard_cases_smoke() {
 #[test]
 #[ignore = "strided quality sample; run in release before releases"]
 fn auto_solves_strided_sample() {
-    let lists = WordLists::load();
+    let lists = shared_word_lists();
     let strided: Vec<Word> = lists.answers.iter().step_by(46).copied().collect();
     assert!(
         strided.len() >= 50,
@@ -175,7 +175,7 @@ fn auto_solves_strided_sample() {
 
 #[test]
 fn compare_final_picks_better_partition_in_ound_cluster() {
-    let lists = WordLists::load();
+    let lists = shared_word_lists();
     let remaining = [
         Word::parse("bound").unwrap(),
         Word::parse("found").unwrap(),
@@ -229,7 +229,7 @@ fn compare_final_picks_better_partition_in_ound_cluster() {
 
 #[test]
 fn compute_suggestion_respects_turns_left_in_endgame() {
-    let lists = WordLists::load();
+    let lists = shared_word_lists();
     let remaining: Vec<Word> = [
         "bound", "found", "hound", "mound", "pound", "round", "sound", "wound",
     ]
@@ -239,7 +239,50 @@ fn compute_suggestion_respects_turns_left_in_endgame() {
     let with_turns = compute_suggestion(&lists, &remaining, &[], Some(3), false).unwrap();
     let open_ended = compute_suggestion(&lists, &remaining, &[], None, false).unwrap();
 
-    assert_eq!(with_turns.word, Word::parse("barfs").unwrap());
-    assert_eq!(open_ended.word, Word::parse("herms").unwrap());
-    assert!(!remaining.contains(&with_turns.word));
+    let max_bucket = |guess: Word| {
+        lists
+            .pattern_cache
+            .build_buckets_for(guess, &remaining)
+            .counts
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0)
+    };
+    let bound = Word::parse("bound").unwrap();
+    let max_with = max_bucket(with_turns.word);
+    let max_open = max_bucket(open_ended.word);
+    let max_bound = max_bucket(bound);
+
+    // Prior quality: offlist probes like barfs/herms achieve max_bucket ~4; guessing a
+    // remaining *ound word leaves max_bucket 7. Turns-aware must not regress to that trap.
+    assert!(
+        max_with <= 4,
+        "turns-aware pick {} max_bucket={max_with} (want <=4; bound trap={max_bound})",
+        with_turns.word
+    );
+    assert!(
+        max_with <= max_open,
+        "turns-aware {} (max={max_with}) must not lose to open-ended {} (max={max_open})",
+        with_turns.word,
+        open_ended.word
+    );
+    assert!(
+        !remaining.contains(&with_turns.word),
+        "with 8 remaining / 3 turns should probe offlist, got {}",
+        with_turns.word
+    );
+}
+
+#[test]
+fn hard_mode_suggestion_compliant_after_slate_miss() {
+    let lists = shared_word_lists();
+    let history = vec![(
+        Word::parse("slate").unwrap(),
+        wordle_solver::core::pattern::Pattern::from_str("xxxxx").unwrap(),
+    )];
+    let remaining = wordle_solver::core::filter::filter_by_history(&lists.answers, &history);
+    let s = compute_suggestion(&lists, &remaining, &history, Some(5), false).unwrap();
+    assert!(satisfies_hard_mode(s.word, &history));
+    assert_eq!(s.word.as_str().len(), 5);
 }
