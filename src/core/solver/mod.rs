@@ -1,11 +1,12 @@
 mod candidates;
 pub mod score;
+mod second_guess;
 
 use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
 
@@ -17,13 +18,16 @@ use crate::core::pattern::Pattern;
 use crate::core::word::Word;
 use crate::core::words::{WordLists, OPENING_GUESS};
 
-pub use score::{compare_final, compare_one_ply, score_one_ply, score_two_ply, GuessScore};
+pub use score::{
+    compare_final, compare_one_ply, score_one_ply, score_two_ply, GuessScore, PATTERN_BUCKETS,
+};
+pub use second_guess::lookup_second_guess;
 
 use candidates::{
-    select_guess_candidates, shares_fixed_suffix, two_ply_interactive_cap,
+    select_guess_candidates, shares_fixed_suffix, should_run_three_ply, two_ply_interactive_cap,
     two_ply_non_interactive_cap, CandidateBuffer,
 };
-use score::{partition_sufficient, score_two_ply_with_mode};
+use score::{partition_sufficient, score_three_ply_with_mode, score_two_ply_with_mode};
 
 #[derive(Clone, Debug)]
 pub struct Suggestion {
@@ -143,13 +147,14 @@ pub fn suggest_guess_with_options(
         return Some(word_lists.opening_suggestion(opening));
     }
 
-    compute_suggestion_with_mode(
+    compute_suggestion_with_mode_opening(
         word_lists,
         remaining_answers,
         history,
         turns_left,
         interactive,
         easy_mode,
+        opening,
     )
 }
 
@@ -246,6 +251,69 @@ pub fn compute_suggestion_with_mode(
     interactive: bool,
     easy_mode: bool,
 ) -> Option<Suggestion> {
+    compute_suggestion_with_mode_opening(
+        word_lists,
+        remaining_answers,
+        history,
+        turns_left,
+        interactive,
+        easy_mode,
+        OPENING_GUESS,
+    )
+}
+
+/// Like [`compute_suggestion_with_mode_opening`] but never consults the second-guess table
+/// (used when regenerating that table offline).
+pub fn compute_suggestion_live(
+    word_lists: &WordLists,
+    remaining_answers: &[Word],
+    history: &[(Word, Pattern)],
+    turns_left: Option<usize>,
+    easy_mode: bool,
+) -> Option<Suggestion> {
+    compute_suggestion_with_mode_opening_ex(
+        word_lists,
+        remaining_answers,
+        history,
+        turns_left,
+        false,
+        easy_mode,
+        OPENING_GUESS,
+        false,
+    )
+}
+
+pub fn compute_suggestion_with_mode_opening(
+    word_lists: &WordLists,
+    remaining_answers: &[Word],
+    history: &[(Word, Pattern)],
+    turns_left: Option<usize>,
+    interactive: bool,
+    easy_mode: bool,
+    opening: Word,
+) -> Option<Suggestion> {
+    compute_suggestion_with_mode_opening_ex(
+        word_lists,
+        remaining_answers,
+        history,
+        turns_left,
+        interactive,
+        easy_mode,
+        opening,
+        true,
+    )
+}
+
+fn compute_suggestion_with_mode_opening_ex(
+    word_lists: &WordLists,
+    remaining_answers: &[Word],
+    history: &[(Word, Pattern)],
+    turns_left: Option<usize>,
+    interactive: bool,
+    easy_mode: bool,
+    opening: Word,
+    use_second_guess_table: bool,
+) -> Option<Suggestion> {
     if remaining_answers.len() == 1 {
         let word = remaining_answers[0];
         if easy_mode || satisfies_hard_mode(word, history) {
@@ -256,6 +324,21 @@ pub fn compute_suggestion_with_mode(
             });
         }
         return None;
+    }
+
+    // Precomputed second guess after the configured opener (O(1); consistent quality + snappy UI).
+    if use_second_guess_table && !easy_mode {
+        if let Some(word) = lookup_second_guess(history, opening) {
+            if satisfies_hard_mode(word, history) && !history.iter().any(|(g, _)| *g == word) {
+                let remaining_set: HashSet<Word> = remaining_answers.iter().copied().collect();
+                let score = score_one_ply(word_lists, word, remaining_answers, &remaining_set);
+                return Some(Suggestion {
+                    word,
+                    entropy: score.one_ply_entropy,
+                    expected_remaining: score.expected_remaining,
+                });
+            }
+        }
     }
 
     let ctx = SolverContext::new(
@@ -272,8 +355,17 @@ pub fn compute_suggestion_with_mode(
 
     CANDIDATE_SCRATCH.with(|scratch| {
         let mut scratch = scratch.borrow_mut();
-        let budget = solver_config().interactive_budget();
+        let cfg = solver_config();
+        let budget = cfg.interactive_budget();
+        let reserve = Duration::from_millis(cfg.interactive_budget_reserve_ms);
         let budget_start = interactive.then(Instant::now);
+        let budget_left = |start: Instant| {
+            budget
+                .checked_sub(start.elapsed())
+                .unwrap_or(Duration::ZERO)
+                > reserve
+        };
+
         let guess_candidates = select_guess_candidates(
             word_lists,
             remaining_answers,
@@ -290,8 +382,6 @@ pub fn compute_suggestion_with_mode(
 
         let candidate_words: Vec<Word> = guess_candidates.to_vec();
         let cached_one_ply = std::mem::take(&mut scratch.precomputed_one_ply);
-
-        let budget_expired = || budget_start.is_some_and(|t| t.elapsed() >= budget);
 
         // Parallel 1-ply scoring (each call is independent; pattern cache is shared read-only).
         let one_ply_scores: Vec<GuessScore> = candidate_words
@@ -321,11 +411,20 @@ pub fn compute_suggestion_with_mode(
             .sort_by(|&a, &b| compare_one_ply(one_ply_scores[b], one_ply_scores[a], remaining_len));
 
         let refine_indices: Vec<usize> = sorted_indices.into_iter().take(max_refine).collect();
-
-        let refined_scores: Vec<GuessScore> = if budget_expired() {
-            Vec::new()
+        let batch = if interactive {
+            cfg.adaptive_two_ply_batch.max(1)
         } else {
-            refine_indices
+            refine_indices.len().max(1)
+        };
+
+        let mut refined_scores: Vec<GuessScore> = Vec::with_capacity(refine_indices.len());
+        let mut offset = 0usize;
+        while offset < refine_indices.len() {
+            if budget_start.is_some_and(|t| !budget_left(t)) {
+                break;
+            }
+            let end = (offset + batch).min(refine_indices.len());
+            let chunk: Vec<GuessScore> = refine_indices[offset..end]
                 .par_iter()
                 .map(|&idx| {
                     score_two_ply_with_mode(
@@ -338,24 +437,65 @@ pub fn compute_suggestion_with_mode(
                         easy_mode,
                     )
                 })
-                .collect()
+                .collect();
+            refined_scores.extend(chunk);
+            offset = end;
+            // Non-interactive: one batch already took everything.
+            if !interactive {
+                break;
+            }
+        }
+
+        // Prefer refined multi-ply scores when available (they carry expected_guesses).
+        let mut best = if !refined_scores.is_empty() {
+            refined_scores
+                .iter()
+                .copied()
+                .max_by(|a, b| compare_final(*a, *b, turns_left, remaining_len))?
+        } else {
+            one_ply_scores
+                .iter()
+                .copied()
+                .max_by(|a, b| compare_final(*a, *b, turns_left, remaining_len))?
         };
 
-        let mut best = one_ply_scores
-            .iter()
-            .copied()
-            .max_by(|a, b| compare_final(*a, *b, turns_left, remaining_len))?;
-
-        for score in refined_scores {
-            if compare_final(score, best, turns_left, remaining_len) == std::cmp::Ordering::Greater
-            {
-                best = score;
+        // Selective shallow 3-ply on hard mid-game states (bounded top-K, budget-aware).
+        if should_run_three_ply(remaining_len, turns_left)
+            && budget_start.map(|t| budget_left(t)).unwrap_or(true)
+        {
+            let k = cfg.three_ply_top_k.min(refined_scores.len()).max(1);
+            let mut top: Vec<GuessScore> = refined_scores.clone();
+            top.sort_by(|a, b| compare_final(*b, *a, turns_left, remaining_len));
+            top.truncate(k);
+            let deeper: Vec<GuessScore> = top
+                .par_iter()
+                .map(|s| {
+                    score_three_ply_with_mode(
+                        word_lists,
+                        *s,
+                        remaining_answers,
+                        history,
+                        turns_left,
+                        easy_mode,
+                    )
+                })
+                .collect();
+            for score in deeper {
+                if compare_final(score, best, turns_left, remaining_len)
+                    == std::cmp::Ordering::Greater
+                {
+                    best = score;
+                }
             }
         }
 
         Some(Suggestion {
             word: best.word,
-            entropy: best.two_ply_entropy,
+            entropy: if best.refined {
+                best.two_ply_entropy
+            } else {
+                best.one_ply_entropy
+            },
             expected_remaining: best.expected_remaining,
         })
     })
@@ -1140,10 +1280,14 @@ mod tests {
         let lists = shared_word_lists();
         let endgame_max = solver_config().endgame_probe_max_remaining;
         let mid_max = solver_config().minimax_midgame_max_remaining;
-        let remaining: Vec<Word> = ing_suffix_cluster().into_iter().take(18).collect();
+        // Use the full *ing cluster so remaining stays above endgame_probe_max_remaining
+        // (widened beyond the legacy 16) while still exercising the offlist suffix probe.
+        let remaining: Vec<Word> = ing_suffix_cluster();
         assert!(
             remaining.len() > endgame_max,
-            "must skip endgame_pick to hit suffix off-list block"
+            "must skip endgame_pick to hit suffix off-list block (len={} endgame_max={})",
+            remaining.len(),
+            endgame_max
         );
         assert!(
             remaining.len() <= mid_max,

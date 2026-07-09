@@ -8,7 +8,7 @@ use crate::core::pattern::Pattern;
 use crate::core::word::Word;
 use crate::core::words::WordLists;
 
-use super::score::{compare_one_ply, frequency_score, score_one_ply, GuessScore};
+use super::score::{compare_one_ply, frequency_score, score_one_ply, GuessScore, RemainingMass};
 
 const SHARED_SUFFIX_LEN: usize = 3;
 
@@ -172,12 +172,20 @@ fn build_guess_pool<'a>(
             cfg.early_game_candidates
         };
 
+        // Remaining-conditioned letter/position mass blended with static frequency.
+        let mass = RemainingMass::from_remaining(remaining);
+
         // Debug interactive builds keep heuristic ranking only — 1-ply prepool is too slow.
         if interactive && cfg!(debug_assertions) {
             let mut scored: Vec<(Word, usize)> = pool
                 .iter()
                 .copied()
-                .map(|w| (w, w.unique_letter_count() * 10 + frequency_score(w)))
+                .map(|w| {
+                    (
+                        w,
+                        w.unique_letter_count() * 10 + frequency_score(w) + mass.score_word(w) / 8,
+                    )
+                })
                 .collect();
             scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             scratch
@@ -185,10 +193,16 @@ fn build_guess_pool<'a>(
                 .extend(scored.into_iter().take(cap).map(|(w, _)| w));
         } else {
             let prepool_cap = cfg.early_game_heuristic_prepool.min(pool.len());
+            // Blend legacy unique+freq ranking with remaining mass so prepool stays close
+            // to the proven baseline while still preferring letters still in play.
             let mut scored: Vec<(Word, usize)> = pool
                 .iter()
                 .copied()
-                .map(|w| (w, w.unique_letter_count() * 10 + frequency_score(w)))
+                .map(|w| {
+                    let legacy = w.unique_letter_count() * 10 + frequency_score(w);
+                    let dynamic = mass.score_word(w) / 6;
+                    (w, legacy + dynamic)
+                })
                 .collect();
             scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             let prepool: Vec<Word> = scored
@@ -256,7 +270,7 @@ pub fn followup_guess_pool<'a>(
     )
 }
 
-/// Cap on 2-ply refinements for the interactive path.
+/// Cap on 2-ply refinements for the interactive path (hard ceiling; adaptive may stop earlier).
 pub fn two_ply_interactive_cap(
     _remaining_len: usize,
     _turns_left: Option<usize>,
@@ -284,6 +298,19 @@ pub fn two_ply_non_interactive_cap(
         cfg.top_two_ply
     };
     base.min(pool_len)
+}
+
+/// Whether selective shallow 3-ply should run for this state.
+/// Disabled when `three_ply_top_k == 0`.
+pub fn should_run_three_ply(remaining_len: usize, turns_left: Option<usize>) -> bool {
+    let cfg = solver_config();
+    if cfg.three_ply_top_k == 0 {
+        return false;
+    }
+    turns_left.is_some_and(|left| {
+        left <= cfg.three_ply_max_turns_left
+            && (cfg.three_ply_min_remaining..=cfg.three_ply_max_remaining).contains(&remaining_len)
+    })
 }
 
 #[cfg(test)]
@@ -382,5 +409,18 @@ mod tests {
         let follow =
             followup_guess_pool(&lists, &remaining, &[], Some(2), false, &mut follow_scratch);
         assert_eq!(main, follow);
+    }
+
+    #[test]
+    fn should_run_three_ply_window() {
+        let cfg = solver_config();
+        if cfg.three_ply_top_k == 0 {
+            assert!(!should_run_three_ply(20, Some(2)));
+            return;
+        }
+        assert!(should_run_three_ply(20, Some(2)));
+        assert!(!should_run_three_ply(20, Some(5)));
+        assert!(!should_run_three_ply(5, Some(2)));
+        assert!(!should_run_three_ply(100, Some(2)));
     }
 }

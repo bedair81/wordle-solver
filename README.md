@@ -118,10 +118,12 @@ Guess×answer feedback is cached on disk under `~/.cache/wordle-solver/` (or `$W
 ## Algorithm
 
 - **Pattern cache** — O(1) feedback lookups after load
-- **Interactive budget** — UI suggestions target ≤ **10 seconds** (typical release ~0.5–2s after turn 2)
+- **Interactive budget** — UI suggestions target ≤ **10 seconds** (turn 2 after opener is typically instant via table)
 - **Parallel scoring** — 1-ply and 2-ply candidate evaluation via Rayon
-- **Smart candidate pool** — early-game heuristic prepool + entropy ranking
-- **2-ply lookahead** — refines top candidates within the interactive budget
+- **Smart candidate pool** — remaining-mass prepool + entropy ranking
+- **2-ply lookahead** — refines top candidates under an adaptive interactive budget; ranks by expected remaining guesses when refined
+- **Second-guess table** — precomputed best responses after the opener (`data/second_guess_table.rs`; regenerate with `cargo run --release --bin gen-second-guess`)
+- **Selective 3-ply** — shallow extra ply on tight mid-game positions
 - **Exact endgame** — minimax-style search when ≤8 answers remain
 - **Opening guess** — configurable (default **SLATE**)
 

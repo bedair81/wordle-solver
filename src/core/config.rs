@@ -116,25 +116,45 @@ pub struct SolverConfig {
     /// When remaining answers ≤ this, run exact endgame minimax search.
     pub exact_endgame_max_remaining: usize,
     pub tight_turns_partition_cutoff: usize,
+    /// Adaptive 2-ply batch size (interactive path).
+    pub adaptive_two_ply_batch: usize,
+    /// Reserve this much of the interactive budget for bookkeeping / return.
+    pub interactive_budget_reserve_ms: u64,
+    /// Remaining-size window for selective shallow 3-ply (inclusive).
+    pub three_ply_min_remaining: usize,
+    pub three_ply_max_remaining: usize,
+    /// How many top 2-ply winners get shallow 3-ply.
+    pub three_ply_top_k: usize,
+    /// Follow-up candidates scored inside each 3-ply branch.
+    pub three_ply_followup_cap: usize,
+    /// Max turns_left for which selective 3-ply is considered.
+    pub three_ply_max_turns_left: usize,
 }
 
 impl Default for SolverConfig {
     fn default() -> Self {
         Self {
             interactive_budget_secs: 10,
-            top_two_ply: 55,
-            top_two_ply_tight: 75,
-            full_two_ply_remaining: 30,
+            top_two_ply: 70,
+            top_two_ply_tight: 90,
+            full_two_ply_remaining: 35,
             early_game_remaining: 500,
             early_game_candidates: 1000,
-            early_game_heuristic_prepool: 2000,
-            interactive_two_ply_max: 110,
+            early_game_heuristic_prepool: 2200,
+            interactive_two_ply_max: 140,
             interactive_early_candidates: if cfg!(debug_assertions) { 470 } else { 1000 },
             turns_left_remaining_slack: 2,
             endgame_probe_max_remaining: 16,
             minimax_midgame_max_remaining: 50,
             exact_endgame_max_remaining: 8,
             tight_turns_partition_cutoff: 4,
+            adaptive_two_ply_batch: 28,
+            interactive_budget_reserve_ms: 120,
+            three_ply_min_remaining: 12,
+            three_ply_max_remaining: 30,
+            three_ply_top_k: 3,
+            three_ply_followup_cap: 6,
+            three_ply_max_turns_left: 2,
         }
     }
 }
@@ -158,6 +178,11 @@ mod tests {
     #[test]
     fn default_opening_is_slate() {
         assert_eq!(AppConfig::default().opening.as_str(), "slate");
+    }
+
+    #[test]
+    fn exact_endgame_at_least_legacy_eight() {
+        assert!(SolverConfig::default().exact_endgame_max_remaining >= 8);
     }
 
     #[test]

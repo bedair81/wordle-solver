@@ -23,9 +23,21 @@ path = "src/bin/opening-benchmark.rs"
 name = "suggestion-latency"
 path = "src/bin/suggestion-latency.rs"
 
+[[bin]]
+name = "gen-second-guess"
+path = "src/bin/gen-second-guess.rs"
+
+[[bin]]
+name = "pick-opener"
+path = "src/bin/pick-opener.rs"
+
 [dependencies]
 ratatui = "0.29"
 crossterm = "0.28"
 rayon = "1.10"
 
 [dev-dependencies]
+
+[[bin]]
+name = "opener-strided"
+path = "src/bin/opener-strided.rs"
