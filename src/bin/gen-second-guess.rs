@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use wordle_solver::core::feedback::compute_feedback;
 use wordle_solver::core::filter::filter_by_history;
-use wordle_solver::core::solver::score::{pattern_bucket_index, PATTERN_BUCKETS};
+use wordle_solver::core::pattern::{pattern_bucket_index, PATTERN_BUCKETS};
 use wordle_solver::core::solver::compute_suggestion_live;
 use wordle_solver::core::word::Word;
 use wordle_solver::core::words::{WordLists, OPENING_GUESS};

@@ -2,8 +2,7 @@
 
 use std::sync::Arc;
 
-use wordle_solver::core::feedback::compute_feedback;
-use wordle_solver::core::filter::guess_pool_only_matches;
+use wordle_solver::core::filter::EmptyCandidates;
 use wordle_solver::core::game::{GameError, GameState};
 use wordle_solver::core::hard_mode::{
     assemble_guess, editable_slot_count, known_green_letters, prefill_feedback_tiles,
@@ -23,9 +22,30 @@ pub enum InputPhase {
     SettingFeedback,
 }
 
+/// Aid (user types guesses) vs Copilot (solver-driven feedback entry).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayMode {
+    Aid,
+    Copilot,
+}
+
+impl PlayMode {
+    pub fn is_copilot(self) -> bool {
+        matches!(self, Self::Copilot)
+    }
+
+    pub fn from_copilot_flag(copilot: bool) -> Self {
+        if copilot {
+            Self::Copilot
+        } else {
+            Self::Aid
+        }
+    }
+}
+
 pub struct PlayState {
     pub game: GameState,
-    pub copilot: bool,
+    pub mode: PlayMode,
     pub phase: InputPhase,
     pub guess_buffer: String,
     pub feedback_tiles: [Option<Tile>; 5],
@@ -55,10 +75,11 @@ impl PlayState {
         colorblind: bool,
         session_path: Option<std::path::PathBuf>,
     ) -> Self {
+        let mode = PlayMode::from_copilot_flag(copilot);
         let mut state = Self {
             game: GameState::with_options(word_lists, easy_mode, opening),
-            copilot,
-            phase: if copilot {
+            mode,
+            phase: if mode.is_copilot() {
                 InputPhase::SettingFeedback
             } else {
                 InputPhase::TypingGuess
@@ -81,7 +102,7 @@ impl PlayState {
             session_path,
         };
         state.request_suggestion();
-        if state.copilot {
+        if state.mode.is_copilot() {
             // Opening is instant; poll once so copilot can sync.
             state.poll_suggestion();
             state.sync_copilot_guess();
@@ -90,6 +111,10 @@ impl PlayState {
             state.poll_suggestion();
         }
         state
+    }
+
+    pub fn is_copilot(&self) -> bool {
+        self.mode.is_copilot()
     }
 
     pub fn cached_suggestion(&self) -> Option<&Suggestion> {
@@ -211,7 +236,7 @@ impl PlayState {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        if self.copilot {
+        if self.mode.is_copilot() {
             self.prepare_copilot_feedback();
         } else {
             self.begin_typing_phase();
@@ -253,7 +278,7 @@ impl PlayState {
     }
 
     pub fn active_guess(&self) -> Option<Word> {
-        if self.copilot {
+        if self.mode.is_copilot() {
             self.cached_suggestion.as_ref().map(|s| s.word)
         } else if let Some(guess) = self.pending_guess {
             Some(guess)
@@ -280,7 +305,7 @@ impl PlayState {
         }
         let snap = SessionSnapshot::from_game(
             &self.game,
-            self.copilot,
+            self.mode.is_copilot(),
             self.colorblind,
             self.game.opening(),
         );
@@ -311,7 +336,7 @@ impl PlayState {
                     self.request_suggestion();
                     self.poll_suggestion();
                     self.persist_session();
-                    if self.copilot {
+                    if self.mode.is_copilot() {
                         self.prepare_copilot_feedback();
                     } else {
                         self.begin_typing_phase();
@@ -327,7 +352,7 @@ impl PlayState {
                 self.request_suggestion();
                 self.poll_suggestion();
                 self.persist_session();
-                if self.copilot {
+                if self.mode.is_copilot() {
                     self.phase = InputPhase::SettingFeedback;
                     self.prepare_copilot_feedback();
                 } else {
@@ -345,13 +370,13 @@ impl PlayState {
                     self.list_scroll += 1;
                 }
             }
-            Action::Char(c) if self.phase == InputPhase::TypingGuess && !self.copilot => {
+            Action::Char(c) if self.phase == InputPhase::TypingGuess && !self.mode.is_copilot() => {
                 if self.guess_buffer.len() < self.editable_slots() {
                     self.guess_buffer.push(c);
                     self.error = None;
                 }
             }
-            Action::Delete if self.phase == InputPhase::TypingGuess && !self.copilot => {
+            Action::Delete if self.phase == InputPhase::TypingGuess && !self.mode.is_copilot() => {
                 self.guess_buffer.pop();
                 self.error = None;
             }
@@ -395,7 +420,7 @@ impl PlayState {
     /// Called each UI tick: poll async suggestion; for copilot, sync when ready.
     pub fn tick(&mut self) {
         let was_thinking = self.thinking;
-        if self.poll_suggestion() && self.copilot && was_thinking {
+        if self.poll_suggestion() && self.mode.is_copilot() && was_thinking {
             self.prepare_copilot_feedback();
         }
     }
@@ -426,7 +451,7 @@ impl PlayState {
                 let _ = self.begin_feedback_phase(word);
             }
             InputPhase::SettingFeedback => {
-                if self.thinking && self.copilot && self.pending_guess.is_none() {
+                if self.thinking && self.mode.is_copilot() && self.pending_guess.is_none() {
                     self.error = Some("Still computing suggestion…".into());
                     return;
                 }
@@ -441,7 +466,7 @@ impl PlayState {
                 let tiles: [Tile; 5] = self.feedback_tiles.map(|t| t.unwrap());
                 let pattern = Pattern::new(tiles);
 
-                let apply = if self.copilot {
+                let apply = if self.mode.is_copilot() {
                     self.game.apply_turn(guess, pattern)
                 } else {
                     self.game.record_turn(guess, pattern)
@@ -461,7 +486,7 @@ impl PlayState {
                         if self.game.is_solved() || self.game.is_lost() {
                             self.begin_typing_phase();
                             self.thinking = false;
-                        } else if self.copilot {
+                        } else if self.mode.is_copilot() {
                             // Wait for async suggestion; tick will sync.
                             self.phase = InputPhase::SettingFeedback;
                             if !self.thinking {
@@ -479,45 +504,7 @@ impl PlayState {
 }
 
 pub fn empty_candidate_warning(game: &GameState, guess: Word, pattern: Pattern) -> Option<String> {
-    if game.is_solved() || game.remaining_count() > 0 {
-        return None;
-    }
-
-    let pool_only = guess_pool_only_matches(&game.word_lists, game.history().as_slice());
-    if !pool_only.is_empty() {
-        let sample: Vec<_> = pool_only.iter().take(5).map(|w| w.to_string()).collect();
-        let extra = if pool_only.len() > sample.len() {
-            format!(" (+{} more)", pool_only.len() - sample.len())
-        } else {
-            String::new()
-        };
-        return Some(format!(
-            "No candidates in our answer list, but these guess-pool words match your history: \
-             {}{}. NYT may use a word missing from answers.txt — try one of these, or run \
-             scripts/update-wordlists.sh.",
-            sample.join(", "),
-            extra
-        ));
-    }
-
-    let matches_any_answer = game
-        .word_lists
-        .answers
-        .iter()
-        .any(|&answer| compute_feedback(guess, answer) == pattern);
-
-    if !matches_any_answer {
-        return Some(format!(
-            "No candidates — this feedback matches no word in our answer list ({guess}). \
-             Check tile colors, or run scripts/update-wordlists.sh if today's NYT answer is missing."
-        ));
-    }
-
-    Some(
-        "No candidates — this feedback contradicts earlier turns. \
-         Double-check tile colors (duplicate letters are easy to mis-enter)."
-            .into(),
-    )
+    EmptyCandidates::classify(game, guess, pattern).map(|status| status.warning_message())
 }
 
 #[cfg(test)]

@@ -1,31 +1,15 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 
+use crate::core::config::solver_config;
 use crate::core::pattern::Pattern;
 use crate::core::word::Word;
 use crate::core::words::WordLists;
 
-use crate::core::config::solver_config;
-
 use super::candidates::{followup_guess_pool, CandidateBuffer};
 
-/// Base-3 index in `0..243` for fixed-size pattern buckets.
-pub fn pattern_bucket_index(pattern: Pattern) -> usize {
-    let mut idx = 0usize;
-    let mut mul = 1usize;
-    for tile in pattern.tiles {
-        let val = match tile {
-            crate::core::pattern::Tile::Absent => 0,
-            crate::core::pattern::Tile::Present => 1,
-            crate::core::pattern::Tile::Correct => 2,
-        };
-        idx += val * mul;
-        mul *= 3;
-    }
-    idx
-}
-
-pub const PATTERN_BUCKETS: usize = 243;
+// Re-export pattern bucket helpers from the pattern layer (canonical home).
+pub use crate::core::pattern::{pattern_bucket_index, PATTERN_BUCKETS};
 
 /// Sentinel: multi-ply fields not computed yet.
 pub const UNREFINED_EXPECTED_GUESSES: f64 = f64::INFINITY;
@@ -139,27 +123,33 @@ pub(crate) fn partition_sufficient(max_bucket: usize, turns_left: usize) -> bool
     max_bucket <= turns_left.saturating_sub(1).max(1)
 }
 
+/// Shared tight-turns partition priority used by final and follow-up comparisons.
+fn compare_partition_priority(
+    a: GuessScore,
+    b: GuessScore,
+    turns_left: Option<usize>,
+) -> Option<std::cmp::Ordering> {
+    let left = turns_left?;
+    if left > solver_config().tight_turns_partition_cutoff || a.worst_bucket == b.worst_bucket {
+        return None;
+    }
+    let a_ok = partition_sufficient(a.worst_bucket, left);
+    let b_ok = partition_sufficient(b.worst_bucket, left);
+    Some(match (a_ok, b_ok) {
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ => b.worst_bucket.cmp(&a.worst_bucket),
+    })
+}
+
 pub fn compare_final(
     a: GuessScore,
     b: GuessScore,
     turns_left: Option<usize>,
     remaining_len: usize,
 ) -> std::cmp::Ordering {
-    // Endgame minimax: when turns are tight, prefer guesses that keep every feedback
-    // bucket small enough to finish.
-    if let Some(left) = turns_left {
-        if left <= solver_config().tight_turns_partition_cutoff && a.worst_bucket != b.worst_bucket
-        {
-            let a_ok = partition_sufficient(a.worst_bucket, left);
-            let b_ok = partition_sufficient(b.worst_bucket, left);
-            match (a_ok, b_ok) {
-                (true, false) => return std::cmp::Ordering::Greater,
-                (false, true) => return std::cmp::Ordering::Less,
-                _ => {}
-            }
-            // Both sufficient or both insufficient: smaller worst bucket wins.
-            return b.worst_bucket.cmp(&a.worst_bucket);
-        }
+    if let Some(ord) = compare_partition_priority(a, b, turns_left) {
+        return ord;
     }
 
     // When both refined: prefer lower expected remaining guesses (average-case objective),
@@ -268,10 +258,7 @@ pub fn expected_guesses_from_buckets(
     let total_f = total as f64;
     let win_idx = PATTERN_BUCKETS - 1; // all Correct = 242
     debug_assert_eq!(
-        pattern_bucket_index(Pattern::new([
-            crate::core::pattern::Tile::Correct;
-            5
-        ])),
+        pattern_bucket_index(Pattern::new([crate::core::pattern::Tile::Correct; 5])),
         win_idx
     );
 
@@ -354,17 +341,8 @@ fn compare_followup(
     turns_left: Option<usize>,
     remaining_len: usize,
 ) -> std::cmp::Ordering {
-    if let Some(left) = turns_left {
-        if left <= solver_config().tight_turns_partition_cutoff && a.worst_bucket != b.worst_bucket
-        {
-            let a_ok = partition_sufficient(a.worst_bucket, left);
-            let b_ok = partition_sufficient(b.worst_bucket, left);
-            match (a_ok, b_ok) {
-                (true, false) => return std::cmp::Ordering::Greater,
-                (false, true) => return std::cmp::Ordering::Less,
-                _ => return b.worst_bucket.cmp(&a.worst_bucket),
-            }
-        }
+    if let Some(ord) = compare_partition_priority(a, b, turns_left) {
+        return ord;
     }
     // Follow-ups: entropy-first (average-case), then softer expected-guesses as tie-break.
     compare_one_ply(a, b, remaining_len).then_with(|| {
@@ -633,8 +611,7 @@ pub fn score_three_ply_with_mode(
             }
         }
         if !best_eg.is_finite() {
-            let fb =
-                best_followup_one_ply(word_lists, subset, &pool, &subset_set, followup_turns);
+            let fb = best_followup_one_ply(word_lists, subset, &pool, &subset_set, followup_turns);
             best_eg = fb.expected_guesses;
             best_ent = fb.entropy;
         }
@@ -920,5 +897,3 @@ mod tests {
         assert_eq!(pattern_bucket_index(win), PATTERN_BUCKETS - 1);
     }
 }
-
-// temporary - will remove

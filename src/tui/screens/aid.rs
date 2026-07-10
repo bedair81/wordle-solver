@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
 };
 
-use wordle_solver::core::filter::guess_pool_only_matches;
+use wordle_solver::core::filter::EmptyCandidates;
 
 use crate::tui::screens::play_state::{InputPhase, PlayState};
 use crate::tui::theme;
@@ -181,18 +181,11 @@ fn render_candidates(frame: &mut Frame, state: &PlayState, area: ratatui::layout
     let title = format!("Candidates ({})", remaining.len());
 
     if remaining.is_empty() && !state.game.is_solved() {
-        let history = state.game.history();
-        let pool_only = guess_pool_only_matches(&state.game.word_lists, &history);
         let message = if let Some(warning) = state.constraint_warning() {
             warning.to_string()
-        } else if !pool_only.is_empty() {
-            let words: Vec<_> = pool_only.iter().take(8).map(|w| w.to_string()).collect();
-            format!(
-                "No NYT answer-list matches. Guess-pool matches: {}.",
-                words.join(", ")
-            )
         } else {
-            "No candidates match these constraints — check feedback or update word lists.".into()
+            // No pending turn context — classify from last turn if present.
+            empty_candidates_message(state)
         };
         let block = Paragraph::new(message)
             .wrap(Wrap { trim: true })
@@ -270,12 +263,12 @@ fn render_input(frame: &mut Frame, state: &PlayState, area: ratatui::layout::Rec
                 }
             }
             InputPhase::SettingFeedback => {
-                if state.thinking && state.copilot {
+                if state.thinking && state.is_copilot() {
                     lines.push(Line::from(Span::styled(
                         "Computing next suggestion… (Esc/q still work)",
                         theme::highlight_style(),
                     )));
-                } else if state.copilot {
+                } else if state.is_copilot() {
                     lines.push(Line::from(
                         "Play the suggested word on NYT, then set tile colors (g/y/x):",
                     ));
@@ -371,6 +364,15 @@ fn footer_text(state: &PlayState) -> String {
             "g/y/x tiles | Enter commit | ←/→ | u undo | r reset | c colorblind | ? help".into()
         }
     }
+}
+
+fn empty_candidates_message(state: &PlayState) -> String {
+    if let Some(last) = state.game.turns.last() {
+        if let Some(status) = EmptyCandidates::classify(&state.game, last.guess, last.pattern) {
+            return status.short_message();
+        }
+    }
+    "No candidates match these constraints — check feedback or update word lists.".into()
 }
 
 #[cfg(test)]
