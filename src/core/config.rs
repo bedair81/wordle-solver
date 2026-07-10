@@ -142,7 +142,8 @@ impl Default for SolverConfig {
             early_game_candidates: 1000,
             early_game_heuristic_prepool: 2200,
             interactive_two_ply_max: 140,
-            interactive_early_candidates: if cfg!(debug_assertions) { 470 } else { 1000 },
+            // Same algorithm in debug and release; interactive budget still caps wall time.
+            interactive_early_candidates: 1000,
             turns_left_remaining_slack: 2,
             endgame_probe_max_remaining: 16,
             minimax_midgame_max_remaining: 50,

@@ -101,7 +101,7 @@ fn quality_benchmark_stats() {
     let avg = total_guesses as f64 / lists.answers.len() as f64;
     eprintln!("opening guess: {}", lists.opening_guess());
     eprintln!("average guesses: {avg:.4}");
-    eprintln!("distribution: {:?}", distribution);
+    eprintln!("distribution: {distribution:?}");
     eprintln!(
         "hardest: {:?}",
         hardest
@@ -304,7 +304,12 @@ fn refined_scores_prefer_lower_expected_guesses_via_shipped_api() {
     let remaining_set: HashSet<Word> = remaining.iter().copied().collect();
     let a = score_two_ply(
         &lists,
-        score_one_ply(&lists, Word::parse("slate").unwrap(), &remaining, &remaining_set),
+        score_one_ply(
+            &lists,
+            Word::parse("slate").unwrap(),
+            &remaining,
+            &remaining_set,
+        ),
         &remaining,
         &remaining_set,
         &[],
@@ -312,7 +317,12 @@ fn refined_scores_prefer_lower_expected_guesses_via_shipped_api() {
     );
     let b = score_two_ply(
         &lists,
-        score_one_ply(&lists, Word::parse("taint").unwrap(), &remaining, &remaining_set),
+        score_one_ply(
+            &lists,
+            Word::parse("taint").unwrap(),
+            &remaining,
+            &remaining_set,
+        ),
         &remaining,
         &remaining_set,
         &[],

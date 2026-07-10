@@ -3,11 +3,12 @@ use std::collections::{HashMap, HashSet};
 use rayon::prelude::*;
 
 use crate::core::config::solver_config;
-use crate::core::hard_mode::{filter_hard_mode_compliant, satisfies_hard_mode};
+use crate::core::hard_mode::satisfies_hard_mode;
 use crate::core::pattern::Pattern;
 use crate::core::word::Word;
 use crate::core::words::WordLists;
 
+use super::pool::CompliantPool;
 use super::score::{compare_one_ply, frequency_score, score_one_ply, GuessScore, RemainingMass};
 
 const SHARED_SUFFIX_LEN: usize = 3;
@@ -77,14 +78,9 @@ fn fill_compliant_pool(
     history: &[(Word, Pattern)],
     easy_mode: bool,
 ) {
-    if easy_mode || history.is_empty() {
-        scratch.compliant_pool.clear();
-        scratch
-            .compliant_pool
-            .extend_from_slice(&word_lists.guess_pool);
-    } else {
-        scratch.compliant_pool = filter_hard_mode_compliant(&word_lists.guess_pool, history);
-    }
+    let pool = CompliantPool::for_turn(word_lists, history, easy_mode);
+    scratch.compliant_pool.clear();
+    scratch.compliant_pool.extend_from_slice(pool.as_slice());
 }
 
 fn compliant_remaining_subset(
@@ -175,57 +171,39 @@ fn build_guess_pool<'a>(
         // Remaining-conditioned letter/position mass blended with static frequency.
         let mass = RemainingMass::from_remaining(remaining);
 
-        // Debug interactive builds keep heuristic ranking only — 1-ply prepool is too slow.
-        if interactive && cfg!(debug_assertions) {
-            let mut scored: Vec<(Word, usize)> = pool
-                .iter()
-                .copied()
-                .map(|w| {
-                    (
-                        w,
-                        w.unique_letter_count() * 10 + frequency_score(w) + mass.score_word(w) / 8,
-                    )
-                })
-                .collect();
-            scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            scratch
-                .early_game_pool
-                .extend(scored.into_iter().take(cap).map(|(w, _)| w));
-        } else {
-            let prepool_cap = cfg.early_game_heuristic_prepool.min(pool.len());
-            // Blend legacy unique+freq ranking with remaining mass so prepool stays close
-            // to the proven baseline while still preferring letters still in play.
-            let mut scored: Vec<(Word, usize)> = pool
-                .iter()
-                .copied()
-                .map(|w| {
-                    let legacy = w.unique_letter_count() * 10 + frequency_score(w);
-                    let dynamic = mass.score_word(w) / 6;
-                    (w, legacy + dynamic)
-                })
-                .collect();
-            scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            let prepool: Vec<Word> = scored
-                .into_iter()
-                .take(prepool_cap)
-                .map(|(w, _)| w)
-                .collect();
+        let prepool_cap = cfg.early_game_heuristic_prepool.min(pool.len());
+        // Blend legacy unique+freq ranking with remaining mass so prepool stays close
+        // to the proven baseline while still preferring letters still in play.
+        let mut scored: Vec<(Word, usize)> = pool
+            .iter()
+            .copied()
+            .map(|w| {
+                let legacy = w.unique_letter_count() * 10 + frequency_score(w);
+                let dynamic = mass.score_word(w) / 6;
+                (w, legacy + dynamic)
+            })
+            .collect();
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let prepool: Vec<Word> = scored
+            .into_iter()
+            .take(prepool_cap)
+            .map(|(w, _)| w)
+            .collect();
 
-            let remaining_set: HashSet<Word> = remaining.iter().copied().collect();
-            let mut ranked: Vec<GuessScore> = prepool
-                .par_iter()
-                .map(|&guess| score_one_ply(word_lists, guess, remaining, &remaining_set))
-                .collect();
-            ranked.sort_by(|a, b| compare_one_ply(*b, *a, remaining.len()));
-            scratch.precomputed_one_ply = ranked
-                .into_iter()
-                .take(cap)
-                .map(|score| (score.word, score))
-                .collect();
-            scratch
-                .early_game_pool
-                .extend(scratch.precomputed_one_ply.keys().copied());
-        }
+        let remaining_set: HashSet<Word> = remaining.iter().copied().collect();
+        let mut ranked: Vec<GuessScore> = prepool
+            .par_iter()
+            .map(|&guess| score_one_ply(word_lists, guess, remaining, &remaining_set))
+            .collect();
+        ranked.sort_by(|a, b| compare_one_ply(*b, *a, remaining.len()));
+        scratch.precomputed_one_ply = ranked
+            .into_iter()
+            .take(cap)
+            .map(|score| (score.word, score))
+            .collect();
+        scratch
+            .early_game_pool
+            .extend(scratch.precomputed_one_ply.keys().copied());
 
         union_unique(&mut scratch.early_game_pool, remaining, &mut scratch.seen);
         exclude_prior_guesses(&mut scratch.early_game_pool, &scratch.tried);
@@ -276,10 +254,6 @@ pub fn two_ply_interactive_cap(
     _turns_left: Option<usize>,
     pool_len: usize,
 ) -> usize {
-    if cfg!(debug_assertions) {
-        const DEBUG_INTERACTIVE_TWO_PLY_MAX: usize = 45;
-        return DEBUG_INTERACTIVE_TWO_PLY_MAX.min(pool_len);
-    }
     solver_config().interactive_two_ply_max.min(pool_len)
 }
 

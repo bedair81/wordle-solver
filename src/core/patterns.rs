@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::core::feedback::compute_feedback;
-use crate::core::solver::score::pattern_bucket_index;
+use crate::core::pattern::pattern_bucket_index;
 use crate::core::word::Word;
 
 /// Precomputed guess×answer feedback bucket indices for fast entropy scoring.
