@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use wordle_solver::core::config::AppConfig;
-use wordle_solver::core::filter::filter_by_history;
+use wordle_solver::core::filter::{filter_by_history, remaining_solutions};
 use wordle_solver::core::hard_mode::satisfies_hard_mode;
 use wordle_solver::core::pattern::Pattern;
 use wordle_solver::core::solver::suggest_guess_with_options;
@@ -130,12 +130,19 @@ pub fn run_suggest(args: &CliArgs) -> ExitCode {
     };
 
     let history = &args.history;
-    let remaining = filter_by_history(&lists.answers, history);
+    let answer_remaining = filter_by_history(&lists.answers, history);
+    let remaining = remaining_solutions(&lists, history);
     let turns_left = 6usize.saturating_sub(history.len());
 
     if remaining.is_empty() {
         eprintln!("error: no answers remain for this history");
         return ExitCode::from(2);
+    }
+    if answer_remaining.is_empty() {
+        eprintln!(
+            "warning: no answers.txt matches; using {} guess-pool candidate(s)",
+            remaining.len()
+        );
     }
 
     if turns_left == 0 {

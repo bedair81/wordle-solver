@@ -12,7 +12,7 @@ use rayon::prelude::*;
 
 use crate::core::config::solver_config;
 use crate::core::feedback::compute_feedback;
-use crate::core::filter::filter_by_history;
+use crate::core::filter::{filter_by_history, remaining_solutions};
 use crate::core::hard_mode::satisfies_hard_mode;
 use crate::core::pattern::Pattern;
 use crate::core::word::Word;
@@ -139,9 +139,18 @@ pub fn suggest_guess_with_options(
     easy_mode: bool,
     opening: Word,
 ) -> Option<Suggestion> {
-    if remaining_answers.is_empty() {
-        return None;
-    }
+    // When the answer list is exhausted but feedback still matches guess-pool words
+    // (NYT answer missing from answers.txt), keep solving against those matches.
+    let pool_fallback;
+    let remaining_answers = if remaining_answers.is_empty() {
+        pool_fallback = remaining_solutions(word_lists, history);
+        if pool_fallback.is_empty() {
+            return None;
+        }
+        pool_fallback.as_slice()
+    } else {
+        remaining_answers
+    };
 
     if history.is_empty() && remaining_answers.len() == word_lists.answers.len() {
         return Some(word_lists.opening_suggestion(opening));

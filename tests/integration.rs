@@ -348,3 +348,82 @@ fn second_guess_lookup_path_after_opener_is_consistent() {
         );
     }
 }
+
+#[test]
+fn copilot_session_after_mason_still_suggests_pshaw() {
+    use wordle_solver::core::game::GameState;
+    use wordle_solver::core::pattern::Pattern;
+    use wordle_solver::core::word::Word;
+    use wordle_solver::core::words::shared_word_lists;
+
+    fn w(s: &str) -> Word {
+        Word::parse(s).unwrap()
+    }
+    fn p(s: &str) -> Pattern {
+        Pattern::from_str(s).unwrap()
+    }
+
+    let lists = shared_word_lists();
+    assert!(
+        lists.is_answer(w("pshaw")),
+        "pshaw must be in answers.txt (NYT solution missing from older lists)"
+    );
+
+    let mut game = GameState::new(lists);
+    game.record_turn(w("slate"), p("YXYXX")).unwrap();
+    game.record_turn(w("abyss"), p("YXXYX")).unwrap();
+    game.record_turn(w("mason"), p("XYYXX")).unwrap();
+
+    assert!(
+        game.remaining_answers().contains(&w("pshaw")),
+        "pshaw should remain after slate/abyss/mason feedback"
+    );
+
+    let suggestion = game
+        .suggest_next()
+        .expect("must still suggest after mason is ruled out");
+    assert_eq!(suggestion.word, w("pshaw"));
+}
+
+#[test]
+fn guess_pool_fallback_suggests_when_answers_empty() {
+    use wordle_solver::core::filter::filter_by_history;
+    use wordle_solver::core::pattern::Pattern;
+    use wordle_solver::core::solver::suggest_guess_with_options;
+    use wordle_solver::core::word::Word;
+    use wordle_solver::core::words::shared_word_lists;
+    use wordle_solver::core::words::OPENING_GUESS;
+
+    fn w(s: &str) -> Word {
+        Word::parse(s).unwrap()
+    }
+    fn p(s: &str) -> Pattern {
+        Pattern::from_str(s).unwrap()
+    }
+
+    let lists = shared_word_lists();
+    // History that leaves no answers.txt word but still matches guess-pool words.
+    // Construct by taking a non-answer guess-pool word and synthesizing consistent feedback
+    // via a word that is answers-only-empty: use pshaw-shaped history but pretend answers
+    // filter returned empty by passing &[].
+    let history = vec![
+        (w("slate"), p("YXYXX")),
+        (w("abyss"), p("YXXYX")),
+        (w("mason"), p("XYYXX")),
+    ];
+    // With pshaw in answers this history is non-empty; force the empty-remaining path.
+    let suggestion = suggest_guess_with_options(
+        &lists,
+        &[],
+        &history,
+        Some(3),
+        false,
+        false,
+        OPENING_GUESS,
+    )
+    .expect("empty answer remaining should fall back to guess-pool matches");
+    assert_eq!(suggestion.word, w("pshaw"));
+
+    let pool = filter_by_history(&lists.guess_pool, &history);
+    assert!(pool.contains(&w("pshaw")));
+}

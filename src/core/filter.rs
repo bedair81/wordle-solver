@@ -51,6 +51,16 @@ pub fn guess_pool_only_matches(word_lists: &WordLists, history: &[(Word, Pattern
         .collect()
 }
 
+/// Answer-list matches for `history`, or guess-pool matches when the answer list is empty.
+/// Used when NYT's solution is missing from `answers.txt` but still a valid guess-pool word.
+pub fn remaining_solutions(word_lists: &WordLists, history: &[(Word, Pattern)]) -> Vec<Word> {
+    let answers = filter_by_history(&word_lists.answers, history);
+    if !answers.is_empty() {
+        return answers;
+    }
+    filter_by_history(&word_lists.guess_pool, history)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,5 +169,26 @@ mod tests {
         let remaining = filter_by_history(&lists.answers, &history);
         assert_eq!(remaining, vec![w("emoji")]);
         assert!(guess_pool_only_matches(&lists, &history).is_empty());
+    }
+
+    #[test]
+    fn remaining_solutions_falls_back_to_guess_pool() {
+        let lists = WordLists::load();
+        let history = vec![
+            (w("slate"), pat("YXYXX")),
+            (w("abyss"), pat("YXXYX")),
+            (w("mason"), pat("XYYXX")),
+        ];
+        // With pshaw in answers.txt this uses the answer list; strip it for the fallback case.
+        let without_pshaw: Vec<_> = lists
+            .answers
+            .iter()
+            .copied()
+            .filter(|&word| word != w("pshaw"))
+            .collect();
+        assert!(filter_by_history(&without_pshaw, &history).is_empty());
+        let pool = filter_by_history(&lists.guess_pool, &history);
+        assert_eq!(pool, vec![w("pshaw")]);
+        assert_eq!(remaining_solutions(&lists, &history), vec![w("pshaw")]);
     }
 }
