@@ -422,16 +422,9 @@ fn guess_pool_fallback_suggests_when_answers_empty() {
         (w("mason"), p("XYYXX")),
     ];
     // With pshaw in answers this history is non-empty; force the empty-remaining path.
-    let suggestion = suggest_guess_with_options(
-        &lists,
-        &[],
-        &history,
-        Some(3),
-        false,
-        false,
-        OPENING_GUESS,
-    )
-    .expect("empty answer remaining should fall back to guess-pool matches");
+    let suggestion =
+        suggest_guess_with_options(&lists, &[], &history, Some(3), false, false, OPENING_GUESS)
+            .expect("empty answer remaining should fall back to guess-pool matches");
     assert_eq!(suggestion.word, w("pshaw"));
 
     let pool = filter_by_history(&lists.guess_pool, &history);

@@ -121,10 +121,7 @@ pub fn suggest(req: SuggestionRequest<'_>) -> Option<Suggestion> {
     } else {
         req.remaining
     };
-    let req = SuggestionRequest {
-        remaining,
-        ..req
-    };
+    let req = SuggestionRequest { remaining, ..req };
 
     if req.history.is_empty() && req.remaining.len() == req.word_lists.answers.len() {
         return Some(req.word_lists.opening_suggestion(req.opening));
