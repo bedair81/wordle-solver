@@ -1,5 +1,24 @@
 use std::fmt;
 
+/// Number of distinct Wordle feedback patterns (3^5).
+pub const PATTERN_BUCKETS: usize = 243;
+
+/// Base-3 index in `0..243` for fixed-size pattern buckets.
+pub fn pattern_bucket_index(pattern: Pattern) -> usize {
+    let mut idx = 0usize;
+    let mut mul = 1usize;
+    for tile in pattern.tiles {
+        let val = match tile {
+            Tile::Absent => 0,
+            Tile::Present => 1,
+            Tile::Correct => 2,
+        };
+        idx += val * mul;
+        mul *= 3;
+    }
+    idx
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Tile {
     Correct,

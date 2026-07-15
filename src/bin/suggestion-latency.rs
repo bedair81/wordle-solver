@@ -87,11 +87,8 @@ fn main() {
         samples.push((format!("FULL max after slate ({max_label})"), max_d));
     }
 
-    println!("Interactive suggestion latency (budget {:?})", budget);
-    println!(
-        "Legacy const INTERACTIVE_SUGGESTION_BUDGET = {:?}",
-        INTERACTIVE_SUGGESTION_BUDGET
-    );
+    println!("Interactive suggestion latency (budget {budget:?})");
+    println!("Legacy const INTERACTIVE_SUGGESTION_BUDGET = {INTERACTIVE_SUGGESTION_BUDGET:?}");
     let mut ok = true;
     for (label, d) in &samples {
         let status = if *d <= budget { "OK" } else { "OVER" };

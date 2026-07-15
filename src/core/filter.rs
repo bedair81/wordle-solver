@@ -61,6 +61,91 @@ pub fn remaining_solutions(word_lists: &WordLists, history: &[(Word, Pattern)]) 
     filter_by_history(&word_lists.guess_pool, history)
 }
 
+/// Why the answer list is empty after applying history (shared by TUI warning + render).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EmptyCandidates {
+    /// Feedback is consistent with guess-pool words missing from answers.txt.
+    GuessPoolOnly { matches: Vec<Word> },
+    /// This turn's feedback matches no bundled answer.
+    FeedbackMatchesNoAnswer { guess: Word },
+    /// Feedback contradicts earlier turns.
+    ContradictoryHistory,
+}
+
+impl EmptyCandidates {
+    pub fn classify(
+        game: &crate::core::game::GameState,
+        guess: Word,
+        pattern: Pattern,
+    ) -> Option<Self> {
+        if game.is_solved() || game.remaining_count() > 0 {
+            return None;
+        }
+
+        let pool_only = guess_pool_only_matches(&game.word_lists, game.history().as_slice());
+        if !pool_only.is_empty() {
+            return Some(Self::GuessPoolOnly { matches: pool_only });
+        }
+
+        let matches_any_answer = game
+            .word_lists
+            .answers
+            .iter()
+            .any(|&answer| compute_feedback(guess, answer) == pattern);
+
+        if !matches_any_answer {
+            Some(Self::FeedbackMatchesNoAnswer { guess })
+        } else {
+            Some(Self::ContradictoryHistory)
+        }
+    }
+
+    pub fn warning_message(&self) -> String {
+        match self {
+            Self::GuessPoolOnly { matches } => {
+                let sample: Vec<_> = matches.iter().take(5).map(|w| w.to_string()).collect();
+                let extra = if matches.len() > sample.len() {
+                    format!(" (+{} more)", matches.len() - sample.len())
+                } else {
+                    String::new()
+                };
+                format!(
+                    "No candidates in our answer list, but these guess-pool words match your history: \
+                     {}{}. NYT may use a word missing from answers.txt — try one of these, or run \
+                     scripts/update-wordlists.sh.",
+                    sample.join(", "),
+                    extra
+                )
+            }
+            Self::FeedbackMatchesNoAnswer { guess } => format!(
+                "No candidates — this feedback matches no word in our answer list ({guess}). \
+                 Check tile colors, or run scripts/update-wordlists.sh if today's NYT answer is missing."
+            ),
+            Self::ContradictoryHistory => {
+                "No candidates — this feedback contradicts earlier turns. \
+                 Double-check tile colors (duplicate letters are easy to mis-enter)."
+                    .into()
+            }
+        }
+    }
+
+    pub fn short_message(&self) -> String {
+        match self {
+            Self::GuessPoolOnly { matches } => {
+                let words: Vec<_> = matches.iter().take(8).map(|w| w.to_string()).collect();
+                format!(
+                    "No NYT answer-list matches. Guess-pool matches: {}.",
+                    words.join(", ")
+                )
+            }
+            Self::FeedbackMatchesNoAnswer { .. } | Self::ContradictoryHistory => {
+                "No candidates match these constraints — check feedback or update word lists."
+                    .into()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

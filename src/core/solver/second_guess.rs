@@ -1,12 +1,11 @@
 //! Precomputed second-guess table after the configured opening word.
 //!
-//! Indexed by [`crate::core::solver::score::pattern_bucket_index`] of the opener feedback
+//! Indexed by [`crate::core::pattern::pattern_bucket_index`] of the opener feedback
 //! pattern (0..243). Empty slots (`None`) fall back to live search.
 //!
 //! Regenerated offline with `cargo run --release --bin gen-second-guess`.
 
-use crate::core::pattern::Pattern;
-use crate::core::solver::score::{pattern_bucket_index, PATTERN_BUCKETS};
+use crate::core::pattern::{pattern_bucket_index, Pattern, PATTERN_BUCKETS};
 use crate::core::word::Word;
 use crate::core::words::OPENING_GUESS;
 
@@ -51,8 +50,10 @@ mod tests {
     #[test]
     fn lookup_requires_matching_opener_and_single_turn() {
         let pat = Pattern::from_str("xxxxx").unwrap();
-        assert!(lookup_second_guess(&[(TABLE_OPENER, pat)], TABLE_OPENER).is_some()
-            || lookup_second_guess(&[(TABLE_OPENER, pat)], TABLE_OPENER).is_none());
+        assert!(
+            lookup_second_guess(&[(TABLE_OPENER, pat)], TABLE_OPENER).is_some()
+                || lookup_second_guess(&[(TABLE_OPENER, pat)], TABLE_OPENER).is_none()
+        );
         // Wrong length
         assert!(lookup_second_guess(&[], TABLE_OPENER).is_none());
         // Wrong opener in history

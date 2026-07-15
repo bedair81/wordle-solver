@@ -153,7 +153,7 @@ mod tests {
     #[test]
     fn pattern_cache_matches_feedback() {
         use crate::core::feedback::compute_feedback;
-        use crate::core::solver::score::pattern_bucket_index;
+        use crate::core::pattern::pattern_bucket_index;
 
         let lists = shared_word_lists();
         let guess = Word::parse("slate").unwrap();
@@ -184,7 +184,7 @@ mod tests {
             "second load should hit on-disk cache"
         );
         // Full rebuild is hundreds of ms; hit should be well under that.
-        assert!(elapsed.as_millis() < 5_000, "cache hit took {:?}", elapsed);
+        assert!(elapsed.as_millis() < 5_000, "cache hit took {elapsed:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
