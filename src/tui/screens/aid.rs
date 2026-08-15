@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
 };
 
-use wordle_solver::core::filter::EmptyCandidates;
+use crate::core::filter::EmptyCandidates;
 
 use crate::tui::screens::play_state::{InputPhase, PlayState};
 use crate::tui::theme;
@@ -377,7 +377,7 @@ fn empty_candidates_message(state: &PlayState) -> String {
 
 #[cfg(test)]
 mod tests {
-    use wordle_solver::core::pattern::Tile;
+    use crate::core::pattern::Tile;
 
     use crate::tui::theme::colorblind_mark;
 

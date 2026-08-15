@@ -1,0 +1,20 @@
+{
+  "name": "wordle-solver",
+  "private": true,
+  "description": "Repo-root task wrappers for the Rust Wordle solver CLI",
+  "license": "MIT",
+  "bin": {
+    "wordle-solver": "./bin/wordle-solver"
+  },
+  "scripts": {
+    "start": "cargo run --release --",
+    "dev": "cargo run --",
+    "build": "cargo build --release",
+    "compile": "cargo build --release",
+    "test": "cargo test --release",
+    "lint": "cargo clippy --all-targets -- -D warnings",
+    "fmt": "cargo fmt --all -- --check",
+    "check": "cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test --release",
+    "coverage": "cargo llvm-cov --release --lcov --output-path lcov.info"
+  }
+}

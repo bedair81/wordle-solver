@@ -2,7 +2,7 @@
 # Refresh NYT Wordle word lists from community-maintained sources.
 #
 # answers.txt merges:
-#   - fredoverflow/wordle NYT answer pool (~2,309 canonical solution words)
+#   - fredoverflow/wordle NYT answer pool (merged with daily lists; bundled answers.txt has 2351 words)
 #   - eithan/wordlelist past answers + today/yesterday (NYT API, daily updates)
 #
 # Usage:

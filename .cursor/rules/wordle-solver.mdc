@@ -1,0 +1,14 @@
+---
+description: Wordle solver agent workflow
+alwaysApply: true
+---
+
+# Wordle solver
+
+- Toolchain is Rust 1.88+ via `rust-toolchain.toml`.
+- Prefer headless `cargo run --release -- suggest --history …` unless a TTY is available.
+- Validate with `make check` or `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test --release`.
+- Use scoped `cargo test --release --lib <module>::` for small core changes.
+- Never use debug `cargo test` for solver-heavy tests.
+- Set `WORDLE_SOLVER_CACHE` in sandboxes so the pattern cache is writable and isolated.
+- Do not run ignored full-answer benchmarks as the default validation loop.

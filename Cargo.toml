@@ -2,7 +2,7 @@
 name = "wordle-solver"
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.88"
 description = "NYTimes Wordle solver with TUI, headless CLI, entropy/minimax strategy, and NYT hard-mode support"
 license = "MIT"
 repository = "https://github.com/bedair81/wordle-solver"

@@ -1,4 +1,6 @@
+pub mod cli;
 pub mod core;
+pub mod tui;
 
 pub use core::config::AppConfig;
 pub use core::game::{GameState, Turn};

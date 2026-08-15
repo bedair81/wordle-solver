@@ -1,0 +1,5 @@
+# Coverage reports come from `make coverage` (cargo llvm-cov --lcov).
+coverage:
+  status:
+    project: off
+    patch: off

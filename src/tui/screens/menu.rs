@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use wordle_solver::core::config::AppConfig;
+use crate::core::config::AppConfig;
 
 use crate::tui::theme;
 

@@ -2,17 +2,17 @@
 
 use std::sync::Arc;
 
-use wordle_solver::core::filter::EmptyCandidates;
-use wordle_solver::core::game::{GameError, GameState};
-use wordle_solver::core::hard_mode::{
+use crate::core::filter::EmptyCandidates;
+use crate::core::game::{GameError, GameState};
+use crate::core::hard_mode::{
     assemble_guess, editable_slot_count, known_green_letters, prefill_feedback_tiles,
     satisfies_hard_mode,
 };
-use wordle_solver::core::pattern::{Pattern, Tile};
-use wordle_solver::core::session::{save_session, SessionSnapshot};
-use wordle_solver::core::solver::{spawn_suggestion_job, Suggestion, SuggestionJob};
-use wordle_solver::core::word::Word;
-use wordle_solver::core::words::WordLists;
+use crate::core::pattern::{Pattern, Tile};
+use crate::core::session::{save_session, SessionSnapshot};
+use crate::core::solver::{spawn_suggestion_job, Suggestion, SuggestionJob};
+use crate::core::word::Word;
+use crate::core::words::WordLists;
 
 use crate::tui::input::Action;
 
@@ -300,7 +300,7 @@ impl PlayState {
             return;
         };
         if self.game.turns.is_empty() || self.game.is_solved() || self.game.is_lost() {
-            let _ = wordle_solver::core::session::clear_session(path);
+            let _ = crate::core::session::clear_session(path);
             return;
         }
         let snap = SessionSnapshot::from_game(
@@ -510,8 +510,8 @@ pub fn empty_candidate_warning(game: &GameState, guess: Word, pattern: Pattern) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wordle_solver::core::words::shared_word_lists;
-    use wordle_solver::OPENING_GUESS;
+    use crate::core::words::shared_word_lists;
+    use crate::OPENING_GUESS;
 
     #[test]
     fn begin_feedback_phase_rejects_hard_mode_violation() {

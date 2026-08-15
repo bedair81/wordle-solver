@@ -1,0 +1,5 @@
+title = "wordle-solver"
+
+[allowlist]
+description = "Bundled word lists are not secrets"
+paths = ['''data/''']

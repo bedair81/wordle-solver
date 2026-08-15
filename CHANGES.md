@@ -19,7 +19,7 @@
 | **Play state split** (`play_state.rs` vs `aid.rs` render) | Pure play logic unit-testable without a terminal |
 | **Game history single source** (`turns` only; `history()` derived) | Less drift risk between dual vectors |
 | **CI** (`.github/workflows/ci.yml`) | fmt + clippy (-D warnings) + `cargo test --release` on PRs |
-| **Cargo.toml metadata** | license, repo, keywords, rust-version 1.74, version 0.2.0 |
+| **Cargo.toml metadata** | license, repo, keywords, rust-version 1.88, version 0.2.0 |
 | **Expanded tests** | Cache hit/miss, session round-trip, async job lifecycle, easy mode, opener, feedback properties, colorblind |
 
 ## Verification evidence (scratch)
@@ -36,3 +36,10 @@
 1. Optional scheduled CI job for ignored full-answer quality benchmark (15–25 min).
 2. Criterion/divan benches if you want historical latency charts beyond `suggestion-latency`.
 3. Mouse support for tile coloring (out of scope for this pass).
+
+## Agent compatibility (this pass)
+
+- MSRV / `rust-toolchain.toml` pin **1.88.0** (locked crates need rustc 1.88+).
+- Repo-root `Makefile` / `package.json` / `./bin/wordle-solver` startup and validate targets.
+- Headless-first docs; TUI exits with a TTY hint; `--healthcheck` for debug.
+- Extra `tests/` files, clippy/rustfmt config, pre-commit hooks, `cargo audit` in CI.

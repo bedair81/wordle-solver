@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use wordle_solver::core::word::Word;
-use wordle_solver::core::words::WordLists;
+use crate::core::word::Word;
+use crate::core::words::WordLists;
 
 use super::play_state::PlayState;
 
