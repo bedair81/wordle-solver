@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Wrapper so agents can run the CLI without `cargo install`.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+exec cargo run --release --quiet -- "$@"

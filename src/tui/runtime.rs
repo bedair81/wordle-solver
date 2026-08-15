@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyEventKind};
 
-use wordle_solver::core::config::AppConfig;
-use wordle_solver::core::session::{config_from_snapshot, load_session, restore_into_game};
-use wordle_solver::core::words::{load_word_lists, WordLists};
+use crate::core::config::AppConfig;
+use crate::core::session::{config_from_snapshot, load_session, restore_into_game};
+use crate::core::words::{load_word_lists, WordLists};
 
 use crate::tui::input::{map_key, Action, InputContext};
 use crate::tui::screens::{

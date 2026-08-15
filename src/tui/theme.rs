@@ -1,6 +1,6 @@
 use ratatui::style::{Color, Modifier, Style};
 
-use wordle_solver::core::pattern::Tile;
+use crate::core::pattern::Tile;
 
 pub const BG: Color = Color::Rgb(18, 18, 19);
 pub const FG: Color = Color::Rgb(215, 218, 220);

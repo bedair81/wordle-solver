@@ -6,13 +6,19 @@ use ratatui::{
     Frame,
 };
 
-use wordle_solver::core::config::AppConfig;
+use crate::core::config::AppConfig;
 
 use crate::tui::theme;
 
 pub struct MenuState {
     pub selected: usize,
     pub show_help: bool,
+}
+
+impl Default for MenuState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MenuState {

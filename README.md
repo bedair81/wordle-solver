@@ -4,20 +4,55 @@ A Rust Wordle solver with a terminal UI (TUI) and headless CLI. Uses official NY
 
 ## Requirements
 
-- Rust 1.74+ (2021 edition)
-- A terminal with UTF-8 support (for the TUI)
+- Rust **1.88+** (edition 2021). `rust-toolchain.toml` pins **1.88.0** with `rustfmt` and `clippy` so rustup selects a compatible compiler.
+- A TTY with UTF-8 support for the interactive TUI. Headless `suggest` does not need a TTY.
 
 ## Build & Run
 
+Repo-root wrappers (pick one): `make start`, `npm start`, `./bin/wordle-solver`, or `cargo run --release`.
+
 ```bash
-cargo run --release                 # interactive TUI
+# Headless next-guess (works without a TTY; preferred for agents)
 cargo run --release -- suggest --history slate:xxxxx
+./bin/wordle-solver suggest --history slate:xxxxx
+npm start -- suggest --history slate:xxxxx
+
+# Interactive TUI (fails without a real TTY; use suggest instead)
+cargo run --release
+npm start
 ```
 
-Run tests:
+The `wordle-solver` binary is **not** on PATH until you install it:
 
 ```bash
-cargo test --release
+make install          # cargo install --path . --locked
+wordle-solver suggest --history slate:xxxxx
+```
+
+First process start builds a ~30MB pattern cache under `$WORDLE_SOLVER_CACHE` or `~/.cache/wordle-solver`. Later launches reuse it when the word lists match.
+
+Debug / troubleshoot paths and word-list counts:
+
+```bash
+cargo run --release -- --healthcheck
+```
+
+## Validate
+
+Default small-change loop (release; debug solver tests can take many minutes):
+
+```bash
+make check            # fmt + clippy -D warnings + cargo test --release
+make test             # cargo test --release
+make fmt              # cargo fmt --all -- --check
+make lint             # cargo clippy --all-targets -- -D warnings
+npm test
+```
+
+Scoped unit tests:
+
+```bash
+cargo test --release --lib word::
 ```
 
 Verify interactive suggestion latency (each UI suggestion under 10s):
@@ -26,35 +61,43 @@ Verify interactive suggestion latency (each UI suggestion under 10s):
 cargo run --release --bin suggestion-latency
 ```
 
-Fast CI runs hard-case smoke tests only. For strided quality sampling:
+Optional quality jobs (not the default loop). Strided sample (~50 answers):
 
 ```bash
 cargo test --release auto_solves_strided_sample -- --ignored
 ```
 
-Full benchmark (all ~2,309 answers, ~15–25 minutes in release):
+Full-answer benchmark only (all 2351 answers, ~15–25 minutes in release):
 
 ```bash
-cargo test --release --test integration -- --ignored --nocapture
+cargo test --release --test integration auto_solves_all_answers_within_six_guesses -- --ignored --nocapture
+```
+
+Coverage report (`lcov.info`):
+
+```bash
+make coverage         # cargo llvm-cov --release --lcov
 ```
 
 ## Headless CLI
 
+Patterns use `G` green, `Y` yellow, `X` gray (also `g`/`y`/`x`). History also accepts `/` and `=` separators.
+
 ```bash
-# Next guess after turns (guess:G/Y/X pattern, comma-separated)
-wordle-solver suggest --history slate:xxxxx,crane:xxYxx
+# Next guess after turns (guess:pattern, comma-separated)
+cargo run --release -- suggest --history slate:xxxxx,crimp:xxYxx
 
 # Easy mode (no hard-mode letter constraints)
-wordle-solver suggest --history slate:Gxxxx --easy
+cargo run --release -- suggest --history slate:Gxxxx --easy
 
 # Custom opening word when history is empty
-wordle-solver suggest --opener crane
+cargo run --release -- suggest --opener crane
 
-# TUI flags
-wordle-solver --easy --colorblind --opener slate
+# TUI flags (need a TTY)
+cargo run --release -- --easy --colorblind --opener slate --tui
 ```
 
-Patterns use `G` green, `Y` yellow, `X` gray (also `g`/`y`/`x`).
+Also: `--hard` (default), `--opening` (alias of `--opener`), `--healthcheck`.
 
 ## Screens
 
@@ -96,24 +139,26 @@ While typing a guess, all letters (including `u`, `r`, and `c`) go into the word
 - **Easy mode** — `--easy` on CLI/TUI launch; no hard-mode constraints on guesses
 - **Colorblind tiles** — high-contrast blue/orange palette plus `■` / `▲` / `·` marks (`c` to toggle)
 - **Configurable opener** — `--opener WORD` (default `slate`)
-- **Session restore** — in-progress games are saved under `~/.local/share/wordle-solver/session.txt` (override with `WORDLE_SOLVER_SESSION`)
+- **Session restore** — in-progress games are saved under `~/.local/share/wordle-solver/session.txt` (override with the `WORDLE_SOLVER_SESSION` environment variable)
 
 ## Word Lists
 
 Bundled under `data/`:
 
-- `answers.txt` — NYT solution words (~2,350)
-- `allowed_guesses.txt` — additional valid guesses (~10,662)
+- `answers.txt` — NYT solution words (2351)
+- `allowed_guesses.txt` — additional valid guesses (10662)
 
-Refresh:
+Refresh (also supports `--dry-run` and `--skip-tests`; a real update runs `cargo test`, not `--release`):
 
 ```bash
 ./scripts/update-wordlists.sh
+./scripts/update-wordlists.sh --dry-run
+./scripts/update-wordlists.sh --skip-tests
 ```
 
 ## Pattern cache
 
-Guess×answer feedback is cached on disk under `~/.cache/wordle-solver/` (or `$WORDLE_SOLVER_CACHE`). First load builds and writes the cache; later launches load it when the word lists match.
+Guess×answer feedback is cached on disk under `~/.cache/wordle-solver/` (or the `WORDLE_SOLVER_CACHE` environment variable). First load builds and writes the cache; later launches load it when the word lists match.
 
 ## Algorithm
 
@@ -133,20 +178,28 @@ Run a full quality report:
 cargo run --release --bin solver-quality
 ```
 
+Other helper binaries: `opening-benchmark`, `pick-opener`, `opener-strided`.
+
 ## Project Structure
 
 ```
-src/core/     — word lists, cache, feedback, filtering, entropy solver, game/session
-src/tui/      — ratatui interface (async suggestions, terminal guard)
-src/cli.rs    — headless suggest command
-data/         — NYT word lists
-tests/        — integration tests
-.github/      — CI (fmt, clippy, release tests)
+src/core/              — word lists, cache, feedback, filtering, entropy solver, game/session
+src/cli.rs             — headless suggest / healthcheck
+src/tui/               — ratatui interface (async suggestions, terminal guard)
+src/bin/wordle-solver.rs — default binary
+src/bin/               — quality, latency, opener, and table-generation tools
+src/lib.rs             — library crate
+data/                  — NYT word lists
+tests/                 — integration and CLI tests
+scripts/               — word-list refresh
+.github/               — CI (fmt, clippy, release tests, cargo audit)
 ```
 
-## Environment
+## Environment variables
 
-| Variable | Purpose |
-|----------|---------|
+| Environment variable | Purpose |
+|----------------------|---------|
 | `WORDLE_SOLVER_CACHE` | Pattern-cache directory |
 | `WORDLE_SOLVER_SESSION` | Session file path |
+
+Copy `.env.example` for the same names. Neither is required for a local run.

@@ -11,13 +11,13 @@ env:
 
 jobs:
   test:
-    name: fmt · clippy · test (release)
+    name: fmt · clippy · test (release) · audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt, clippy
 
@@ -35,3 +35,11 @@ jobs:
         env:
           # Isolate cache dir so CI is deterministic and writable.
           WORDLE_SOLVER_CACHE: ${{ runner.temp }}/wordle-solver-cache
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit
+        run: cargo audit

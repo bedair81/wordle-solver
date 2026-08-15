@@ -1,0 +1,4 @@
+# Clippy rules for this crate. `make lint` and CI are strict (-D warnings).
+# ignore unused allow attributes; keep analysis on by default.
+avoid-breaking-exported-api = false
+cognitive-complexity-threshold = 40

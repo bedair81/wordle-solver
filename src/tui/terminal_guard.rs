@@ -43,9 +43,23 @@ pub struct TerminalGuard {
 impl TerminalGuard {
     pub fn enter() -> io::Result<Self> {
         install_panic_hook();
-        enable_raw_mode()?;
+        enable_raw_mode().map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!(
+                    "{err}; TUI needs a real TTY. Use `cargo run --release -- suggest --history slate:xxxxx` for headless."
+                ),
+            )
+        })?;
         let mut stdout = stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        execute!(stdout, EnterAlternateScreen).map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!(
+                    "{err}; TUI needs a real TTY. Use `cargo run --release -- suggest --history slate:xxxxx` for headless."
+                ),
+            )
+        })?;
         NEEDS_RESTORE.store(true, Ordering::SeqCst);
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;

@@ -1,7 +1,7 @@
 use ratatui::{buffer::Buffer, layout::Rect, style::Style, widgets::Widget};
 
-use wordle_solver::core::pattern::{Pattern, Tile};
-use wordle_solver::core::word::Word;
+use crate::core::pattern::{Pattern, Tile};
+use crate::core::word::Word;
 
 use crate::tui::theme::{self, colorblind_mark, tile_style};
 
@@ -106,8 +106,8 @@ impl Widget for TileRow<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wordle_solver::core::pattern::{Pattern, Tile};
-    use wordle_solver::core::word::Word;
+    use crate::core::pattern::{Pattern, Tile};
+    use crate::core::word::Word;
 
     #[test]
     fn colorblind_label_includes_mark() {

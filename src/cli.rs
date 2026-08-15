@@ -3,13 +3,13 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use wordle_solver::core::config::AppConfig;
-use wordle_solver::core::filter::{filter_by_history, remaining_solutions};
-use wordle_solver::core::hard_mode::satisfies_hard_mode;
-use wordle_solver::core::pattern::Pattern;
-use wordle_solver::core::solver::suggest_guess_with_options;
-use wordle_solver::core::word::Word;
-use wordle_solver::core::words::{load_word_lists, shared_word_lists, OPENING_GUESS};
+use crate::core::config::AppConfig;
+use crate::core::filter::{filter_by_history, remaining_solutions};
+use crate::core::hard_mode::satisfies_hard_mode;
+use crate::core::pattern::Pattern;
+use crate::core::solver::suggest_guess_with_options;
+use crate::core::word::Word;
+use crate::core::words::{load_word_lists, shared_word_lists, OPENING_GUESS};
 
 #[derive(Debug, Default)]
 pub struct CliArgs {
@@ -20,6 +20,8 @@ pub struct CliArgs {
     pub colorblind: bool,
     pub help: bool,
     pub version: bool,
+    /// Print cache, session, and word-list status without starting the TUI.
+    pub healthcheck: bool,
     /// Launch TUI even if other flags present (default when no subcommand).
     pub tui: bool,
 }
@@ -39,6 +41,10 @@ pub fn parse_args(args: &[String]) -> Result<CliArgs, String> {
             }
             "--help" | "-h" | "help" => out.help = true,
             "--version" | "-V" => out.version = true,
+            "--healthcheck" | "healthcheck" => {
+                out.healthcheck = true;
+                out.tui = false;
+            }
             "--easy" => out.easy = true,
             "--hard" => out.easy = false,
             "--colorblind" => out.colorblind = true,
@@ -95,24 +101,47 @@ pub fn print_help() {
         "\
 wordle-solver — NYT Wordle solver (TUI + headless)
 
+From a checkout (binary is not on PATH unless you cargo install --path .):
+  cargo run --release -- [args]
+  ./bin/wordle-solver [args]
+  npm start -- [args]
+
 Usage:
-  wordle-solver                         Launch interactive TUI
+  wordle-solver                         Launch interactive TUI (needs a TTY)
   wordle-solver suggest [options]       Print next-guess suggestion
+  wordle-solver --healthcheck           Print cache, session, and word-list status
   wordle-solver --help
 
 Suggest options:
-  --history slate:xxxxx,crane:xxYxx   Prior turns (guess:G/Y/X pattern)
+  --history slate:xxxxx,crimp:xxYxx   Prior turns (guess:G/Y/X; also / or =)
   --easy                              Disable hard-mode constraints
   --hard                              Enforce hard mode (default)
   --opener WORD                       Opening guess when history is empty
+  --opening WORD                      Alias of --opener
   --colorblind                        (TUI) high-contrast tile symbols
+  --tui                               Force the TUI even if other flags are set
 
 Examples:
-  wordle-solver suggest --history slate:xxxxx
-  wordle-solver suggest --history slate:Gxxxx --easy
-  wordle-solver suggest --opener crane
+  cargo run --release -- suggest --history slate:xxxxx
+  cargo run --release -- suggest --history slate:Gxxxx --easy
+  cargo run --release -- suggest --opener crane
 "
     );
+}
+
+/// Print resolved paths and word-list counts for debug / healthcheck.
+pub fn run_healthcheck() -> ExitCode {
+    let config = AppConfig::default();
+    let cache_dir = config.resolve_cache_dir();
+    let session_path = config.resolve_session_path();
+    let lists = shared_word_lists();
+    println!("ok healthcheck");
+    println!("version={}", env!("CARGO_PKG_VERSION"));
+    println!("answers={}", lists.answers.len());
+    println!("guess_pool={}", lists.guess_pool.len());
+    println!("cache_dir={}", cache_dir.display());
+    println!("session_path={}", session_path.display());
+    ExitCode::SUCCESS
 }
 
 pub fn run_suggest(args: &CliArgs) -> ExitCode {
@@ -219,5 +248,12 @@ mod tests {
         assert!(parsed.easy);
         assert_eq!(parsed.opening.unwrap().as_str(), "crane");
         assert_eq!(parsed.history.len(), 1);
+    }
+
+    #[test]
+    fn parse_args_healthcheck() {
+        let parsed = parse_args(&["--healthcheck".into()]).unwrap();
+        assert!(parsed.healthcheck);
+        assert!(!parsed.tui);
     }
 }
