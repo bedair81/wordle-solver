@@ -12,7 +12,7 @@ TUI needs a real terminal: `cargo run --release` or `npm start`. Without a TTY t
 
 First run writes a ~30MB pattern cache under `$WORDLE_SOLVER_CACHE` or `~/.cache/wordle-solver`. Later runs reuse it. Debug with `cargo run --release -- --healthcheck`.
 
-`wordle-solver` is not on PATH unless you `make install` (`cargo install --path .`).
+`wordle-solver` is not on PATH unless you `make install` (`cargo install --path . --locked`).
 
 ## Validate a small change
 
